@@ -25,10 +25,11 @@ export const INDEX = {
   talks: 'talks',
   users: 'users',
   attendance: 'attendance',
+  operations: 'converge-operations',
 } as const;
 
 /** Name of the inference endpoint backing every `semantic_text` field. */
-export const INFERENCE_ID = 'e5-small';
+export const INFERENCE_ID = process.env.ELASTICSEARCH_INFERENCE_ID ?? 'e5-small';
 
 /**
  * True when the e5 inference endpoint is deployed and serving. Ranking adds a

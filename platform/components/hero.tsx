@@ -66,6 +66,9 @@ export function Hero() {
           </div>
 
           <div className="mt-7 flex flex-wrap gap-3">
+            <Link href="/discover" className="btn btn-primary">
+              Search or ask the conference
+            </Link>
             <Link href="/onboarding" className="btn btn-primary">
               Create your profile
             </Link>

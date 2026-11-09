@@ -1,0 +1,346 @@
+{
+  "apiVersion": "perses.dev/v1alpha1",
+  "kind": "PersesDashboard",
+  "metadata": {
+    "name": "converge-operations"
+  },
+  "spec": {
+    "display": {
+      "name": "Converge \u00b7 Search and RAG operations"
+    },
+    "datasources": {
+      "default": {
+        "name": "default",
+        "plugin": {
+          "kind": "PrometheusDataSource"
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_0"
+              }
+            },
+            {
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_1"
+              }
+            },
+            {
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_2"
+              }
+            },
+            {
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_3"
+              }
+            },
+            {
+              "x": 0,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_4"
+              }
+            },
+            {
+              "x": 12,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_5"
+              }
+            },
+            {
+              "x": 0,
+              "y": 18,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_6"
+              }
+            },
+            {
+              "x": 12,
+              "y": 18,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_7"
+              }
+            },
+            {
+              "x": 0,
+              "y": 24,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/panel_8"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "panels": {
+      "panel_0": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Discovery \u00b7 p95 latency (ms)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"app.operation.duration\",service_name=\"confluence\",app_operation=\"discovery\"}[5m])))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_1": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Discovery \u00b7 Operations / second"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"discovery\"}[5m]))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_2": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Discovery \u00b7 Fallback rate (%)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "100 * (sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"discovery\",app_outcome=\"fallback\"}[5m])) or vector(0)) / sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"discovery\"}[5m]))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_3": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Retrieval \u00b7 p95 latency (ms)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"app.operation.duration\",service_name=\"confluence\",app_operation=\"retrieval\"}[5m])))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_4": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Retrieval \u00b7 Operations / second"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"retrieval\"}[5m]))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_5": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Retrieval \u00b7 Fallback rate (%)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "100 * (sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"retrieval\",app_outcome=\"fallback\"}[5m])) or vector(0)) / sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"retrieval\"}[5m]))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_6": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Generation \u00b7 p95 latency (ms)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"app.operation.duration\",service_name=\"confluence\",app_operation=\"generation\"}[5m])))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_7": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Generation \u00b7 Operations / second"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"generation\"}[5m]))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "panel_8": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Generation \u00b7 Fallback rate (%)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "100 * (sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"generation\",app_outcome=\"fallback\"}[5m])) or vector(0)) / sum(rate({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"generation\"}[5m]))"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

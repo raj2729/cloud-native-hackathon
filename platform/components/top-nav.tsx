@@ -4,10 +4,12 @@ import { Avatar } from './avatar';
 import { VoiceNavigation } from './voice-navigation';
 
 const LINKS = [
+  { href: '/discover', label: 'Discover' },
   { href: '/agenda', label: 'Agenda' },
   { href: '/people', label: 'People' },
   { href: '/live', label: 'Live' },
   { href: '/organizer', label: 'Organizer' },
+  { href: '/admin', label: 'Admin' },
 ];
 
 export async function TopNav() {

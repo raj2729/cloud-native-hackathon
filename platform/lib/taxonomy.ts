@@ -13,6 +13,8 @@ export const TAXONOMY = [
   'ml-ops',
   'evals',
   'fine-tuning',
+  'computer-vision',
+  'robotics',
   // Data
   'data-eng',
   'streaming',
@@ -92,6 +94,8 @@ export const TAXONOMY_GROUPS: { title: string; interests: Interest[] }[] = [
   {
     title: 'AI & ML',
     interests: [
+      'computer-vision',
+      'robotics',
       'ai-agents',
       'llms',
       'rag',
@@ -155,6 +159,8 @@ export const TAXONOMY_GROUPS: { title: string; interests: Interest[] }[] = [
  * the Claude API is unavailable. Keys are taxonomy slugs.
  */
 export const TAG_KEYWORDS: Partial<Record<Interest, string[]>> = {
+  'computer-vision': ['computer vision', 'image recognition', 'object detection', 'visual perception'],
+  'robotics': ['robot', 'robotics', 'motion planning', 'autonomous navigation'],
   'ai-agents': ['agent', 'agentic', 'tool use', 'autonomous', 'mcp'],
   'llms': ['llm', 'language model', 'transformer', 'inference', 'claude', 'gpt'],
   'rag': ['rag', 'retrieval augmented', 'grounding', 'context window'],

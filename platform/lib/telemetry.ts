@@ -14,6 +14,7 @@ import {
   type Attributes,
   type Span,
 } from '@opentelemetry/api';
+import { TARGETS, type Operation, type OperationOutcome } from './observability';
 
 const TRACER_NAME = 'converge';
 
@@ -81,6 +82,23 @@ export function markSpanError(span: Span, message: string): void {
 }
 
 const meter = metrics.getMeter(TRACER_NAME);
+
+const operationDuration = meter.createHistogram('app.operation.duration', {
+  description: 'Conference operation latency', unit: 'ms',
+  advice: { explicitBucketBoundaries: [100, 250, 500, 1000, 2000, 3000, 5000, 10000, 12000, 15000, 30000] },
+});
+const operationRequests = meter.createCounter('app.operation.requests', { description: 'Completed conference operations', unit: '{operation}' });
+const operationSlo = meter.createCounter('app.operation.slo', { description: 'Operation SLI event counts', unit: '{operation}' });
+
+export function recordOperationMetrics(operation: Operation, outcome: OperationOutcome, durationMs: number, provider: string): void {
+  try {
+    const attributes = { 'app.operation': operation, 'app.outcome': outcome, 'app.provider': provider };
+    operationDuration.record(durationMs, attributes);
+    operationRequests.add(1, attributes);
+    operationSlo.add(1, { 'app.operation': operation, 'app.slo': 'latency', 'app.good': String(outcome === 'ok' && durationMs <= TARGETS[operation]) });
+    operationSlo.add(1, { 'app.operation': operation, 'app.slo': 'availability', 'app.good': String(outcome === 'ok') });
+  } catch { /* Observability cannot fail a user operation. */ }
+}
 
 /** Check-ins observed per room, recorded whenever the live dashboard renders. */
 const roomOccupancy = meter.createGauge('app.room.occupancy', {

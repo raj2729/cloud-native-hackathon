@@ -1,3 +1,4 @@
+import './env';
 /**
  * Seeds the demo dataset: one conference, 24 talks, 12 speakers, 20 curated
  * personas in four interest clusters, ~80 crowd attendees so room counts look
@@ -9,7 +10,7 @@
  *   npx tsx scripts/seed.ts          # curated tags, deterministic enrichment
  *   npx tsx scripts/seed.ts --ai     # also run Claude profile enrichment
  *
- * Safe to re-run: it deletes and rewrites the demo documents.
+ * Safe to re-run: upserts demo documents; --reset explicitly clears app indices.
  */
 import { es, INDEX, resetSemanticCache } from '../lib/es';
 import { EVENT_ID, PERSONAS, ROOMS, SPEAKERS, TALKS } from '../lib/demo-data';
@@ -202,6 +203,8 @@ function buildCrowd(): SeedUser[] {
       cluster: `${cluster} (crowd)`,
       avatarSeed: handle,
       isSeeded: true,
+      discoveryOptIn: true,
+      eventIds: [EVENT_ID],
       links: { linkedin: `https://linkedin.com/in/${handle}` },
       profileText: buildProfileText({
         name,
@@ -263,7 +266,7 @@ function buildTalks(withSemantic: boolean): Talk[] {
       createdAt: new Date(NOW - 20 * 24 * 60 * MIN).toISOString(),
     };
     if (withSemantic) {
-      talk.semantic = `${talk.title}. ${talk.abstract} Topics: ${talk.tags.join(', ')}.`;
+      talk.semantic = `${talk.title}. ${talk.abstract} Topics: ${talk.tags.join(', ')}. Speaker: ${talk.speaker.name}. ${talk.speaker.bio}`;
     }
     return talk;
   });
@@ -306,10 +309,15 @@ async function buildPersonas(withSemantic: boolean): Promise<SeedUser[]> {
       cluster: persona.cluster,
       avatarSeed: persona.id,
       isSeeded: true,
+      discoveryOptIn: true,
+      eventIds: [EVENT_ID],
       links: {
         linkedin: persona.linkedin,
         github: persona.github,
         resumeText: persona.resumeText,
+        githubBio: `Synthetic demo profile. ${headline}`,
+        repositoryDescriptions: [`Demo project: ${persona.interests.slice(0, 2).join(' and ')}. ${summary}`],
+        linkedinBio: `Synthetic professional bio: ${summary}`,
       },
       profileText: buildProfileText({
         name: persona.name,
@@ -459,8 +467,8 @@ async function clearIndex(index: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const health = await es.cluster.health({ wait_for_status: 'yellow', timeout: '30s' });
-  console.log(`Cluster "${health.cluster_name}" is ${health.status}`);
+  const info = await es.info();
+  console.log(`Connected to "${info.cluster_name}"`);
 
   const [talksSemantic, usersSemantic] = await Promise.all([
     hasSemanticField(INDEX.talks),
@@ -485,7 +493,10 @@ async function main(): Promise<void> {
       `${personas.length} personas + ${crowd.length} crowd, ${attendance.length} attendance rows`,
   );
 
-  for (const index of Object.values(INDEX)) await clearIndex(index);
+  // Preserve real profiles and unrelated conference data on shared clusters.
+  if (process.argv.includes('--reset')) {
+    for (const index of [INDEX.events, INDEX.talks, INDEX.users, INDEX.attendance]) await clearIndex(index);
+  }
 
   await bulkIndex(INDEX.events, [event]);
   await bulkIndex(INDEX.talks, talks, talksSemantic ? 8 : 25);
@@ -496,7 +507,7 @@ async function main(): Promise<void> {
 
   const live = talks.filter((t) => Date.parse(t.startsAt) <= NOW && Date.parse(t.endsAt) > NOW);
   console.log(`\nDone. Live right now: ${live.map((t) => t.title).join(' | ') || '(none)'}`);
-  console.log(`Open http://localhost:3000/events/${EVENT_ID}`);
+  console.log('Open http://localhost:3000/discover');
 }
 
 main().catch((err) => {

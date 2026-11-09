@@ -32,8 +32,9 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <Dash0Rum />
+        <a href="#main-content" className="skip-link">Skip to content</a>
         <TopNav />
-        <main className="relative z-10 flex-1 w-full max-w-6xl mx-auto px-5 pb-20">
+        <main id="main-content" className="relative z-10 flex-1 w-full max-w-6xl mx-auto px-5 pb-20">
           {children}
         </main>
       </body>
