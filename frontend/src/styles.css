@@ -1,0 +1,64 @@
+html {
+  scroll-behavior: smooth;
+}
+
+#preloader {
+  display: none;
+}
+
+.back-to-top {
+  display: none;
+}
+
+.back-to-top.visible {
+  display: block;
+}
+
+.subscription-notice {
+  position: fixed;
+  z-index: 1100;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  color: #fff;
+  background: #e91e63;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px #0003;
+}
+
+.subscription-notice button,
+.react-lightbox button {
+  padding: 0;
+  color: inherit;
+  font-size: 1.75rem;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.react-lightbox {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 4rem 1rem 1rem;
+  background: #000d;
+}
+
+.react-lightbox img {
+  max-width: min(100%, 1100px);
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.react-lightbox button {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+  color: #fff;
+}

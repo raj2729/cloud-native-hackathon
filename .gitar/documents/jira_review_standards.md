@@ -1,0 +1,9 @@
+# Jira and Slack request tracking
+
+- Jira is optional. Never fail a review because the PR title or commits do not contain a Jira issue key.
+- Use Jira only when an issue key appears in the PR title or one or more commit messages. Do not search Jira, infer an issue from Slack, create a Jira issue from Slack, or link/transition a Jira issue based solely on Slack context. A Jira key mentioned only in a Slack message or the PR description does not trigger Jira actions.
+- When a Jira key appears in the title or commits, read that issue through the configured Jira integration and compare the actual diff and tests with its title, description, and acceptance criteria. If multiple different keys appear, report the conflict and do not silently choose one. If the identified issue cannot be found or read, report that; do not claim the change was checked against it.
+- For a verified Jira issue, associate the PR with it and transition it to the project's "In Review" status or configured equivalent. Verify the association and transition before reporting success. If Jira operations are unavailable or fail, report that accurately without claiming completion.
+- The Slack request context check must independently search `#customer-feedback` for relevant messages and permalinks on applicable PRs. Review the complete thread and compare each explicit Slack requirement with the changed code, whether or not a Jira key is present. Cite the source and report a blocking finding for every unmet requirement.
+- Continue applying the other project review standards to unrelated regressions.
+- Review the changed code and tests against the Jira issue and all relevant Slack requirements. Report a blocking finding for each unmet explicit requirement, cite its source, and recommend the specific change. Continue reviewing for unrelated regressions.

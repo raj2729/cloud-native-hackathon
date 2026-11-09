@@ -1,0 +1,8 @@
+# React standards
+
+- Keep rendered UI driven by React state and props. When a component uses effects to integrate with the legacy DOM, clean up event listeners, timers, and other side effects when dependencies change or the component unmounts. Check for stale state and duplicate handlers, especially around the carousel, navigation, schedule tabs, accordions, and gallery lightbox.
+- When changing legacy markup or its interactions, verify selectors and data attributes still match the React handlers. Controls must be keyboard-operable, have an accessible name, and keep visible state in sync with ARIA state. A lightbox must behave as a dialog and provide a usable way to close it.
+- Flag placeholder links or controls that look functional but do nothing, and success messages that claim an action (such as subscribing) completed when it does not. The current frontend has no configured backend in `frontend/package.json`; do not assume client-only UI persists or sends data.
+- For frontend asset or entry-point changes, verify references against source files under `frontend/assets/` and `frontend/src/`. Do not treat `frontend/dist/` as source. Consider whether asset URLs work when deployed under a path other than the domain root.
+- For UI or CSS changes, check narrow-screen behavior and preserve responsive styles. Flag regressions that make conference navigation, schedule, pricing, or other primary content unusable on mobile.
+- For changes affecting the frontend build, require `npm run build` from `frontend/` to pass. Attribute failures to the pull request only when the change caused them.
