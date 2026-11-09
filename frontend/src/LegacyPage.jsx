@@ -212,7 +212,7 @@ export default function LegacyPage() {
                                 </h1>
 
                                 <a
-                                    href="#pricing"
+                                    href="#"
                                     className="fadeInLeft wow btn btn-common btn-lg"
                                     data-wow-delay=".6s"
                                 >
