@@ -61,8 +61,7 @@ export async function startSpan<T>(
  * regression is easy to tell apart from a real one in Dash0. Unset means no-op.
  */
 export async function injectLatency(span: Span): Promise<void> {
-  // TEMP: hard-coded 1500ms default to test the CI latency gate — revert this commit.
-  const ms = Number.parseInt(process.env.LATENCY_INJECT_MS ?? '1500', 10);
+  const ms = Number.parseInt(process.env.LATENCY_INJECT_MS ?? '', 10);
   if (!Number.isFinite(ms) || ms <= 0) return;
   span.setAttribute('app.fault.injected_latency_ms', ms);
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
