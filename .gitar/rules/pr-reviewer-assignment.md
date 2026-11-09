@@ -2,7 +2,7 @@
 title: "Assign the PR reviewer"
 description: "Always assign the appropriate reviewer to every pull request"
 type: automation
-when: "Whenever a pull request is opened or its selected reviewer changes"
+when: "Whenever a pull request is opened or updated (new commits, title or description edits); re-evaluate the selected reviewer and act only if it differs from the current assignment"
 actions: "Inspect the pull request title, commit messages, and changed files; assign Isha Patel when the changes relate to the MCP server, otherwise assign Raj Sanghavi; send the selected reviewer a Slack direct message with the PR link and request for review"
 integrations: ["slack"]
 ---
