@@ -2,7 +2,8 @@ name: Platform CI
 
 # Scoped to platform/ so it does not run on changes to frontend/.
 #
-# `check` typechecks, lints and builds on every push and PR.
+# `check` typechecks, lints and builds on pushes to main. PRs run only
+# `latency`, which builds the PR itself, to keep the feedback loop short.
 #
 # `latency` catches PRs that make the app slower — without a hosted app. On the
 # runner it:
@@ -54,6 +55,7 @@ env:
 
 jobs:
   check:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +82,6 @@ jobs:
           ELASTICSEARCH_URL: http://localhost:9200
 
   latency:
-    needs: check
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
@@ -148,15 +149,18 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Comparing base $sha against head $HEAD_SHA"
 
-      - name: Build head
-        run: npm ci && npm run build
-
-      - name: Build base
-        id: build_base
+      # Both builds at once; the head build doubles as the PR's build check.
+      - name: Build base and head
         run: |
           git worktree add "$RUNNER_TEMP/base" "${{ steps.base.outputs.sha }}"
-          cd "$RUNNER_TEMP/base/platform"
+          (cd "$RUNNER_TEMP/base/platform" && npm ci && npm run build) > "$RUNNER_TEMP/build-base.log" 2>&1 &
+          base_pid=$!
           npm ci && npm run build
+          if ! wait "$base_pid"; then
+            echo "::error::Base build failed"
+            tail -40 "$RUNNER_TEMP/build-base.log"
+            exit 1
+          fi
 
       - name: Set up and seed Elasticsearch
         run: npm run es:setup && npm run es:seed
