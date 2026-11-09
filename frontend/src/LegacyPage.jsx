@@ -220,7 +220,7 @@ export default function LegacyPage() {
                                 </a>
 
                                 <a
-                                    href="#schedules"
+                                    href="#"
                                     className="fadeInRight wow btn btn-border btn-lg"
                                     data-wow-delay=".6s"
                                 >
