@@ -7,11 +7,13 @@ import { Client } from '@elastic/elasticsearch';
 const globalForEs = globalThis as unknown as { esClient?: Client };
 
 export const ES_NODE = process.env.ELASTICSEARCH_URL ?? 'http://localhost:9200';
+const ES_API_KEY = process.env.ELASTICSEARCH_API_KEY;
 
 export const es: Client =
   globalForEs.esClient ??
   new Client({
     node: ES_NODE,
+    ...(ES_API_KEY ? { auth: { apiKey: ES_API_KEY } } : {}),
     requestTimeout: 30_000,
     maxRetries: 2,
   });
