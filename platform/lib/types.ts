@@ -49,10 +49,15 @@ export interface UserLinks {
   linkedin?: string;
   github?: string;
   resumeText?: string;
+  githubBio?: string;
+  repositoryDescriptions?: string[];
+  linkedinBio?: string;
 }
 
 export interface User {
   id: string;
+  discoveryOptIn?: boolean;
+  eventIds?: string[];
   name: string;
   headline: string;
   summary: string;

@@ -34,7 +34,7 @@ export const SPEAKERS: SpeakerSeed[] = [
     name: 'Ada Okonkwo',
     title: 'Principal Engineer, Retrieval',
     company: 'Northwind Labs',
-    bio: 'Ada has spent eight years making search engines return the right answer. They led the migration of Northwind\'s product search from a hand-tuned BM25 stack to hybrid retrieval, and now work on evaluation harnesses for RAG systems that have to be right rather than merely plausible.',
+    bio: 'Ada previously co-founded a search startup. Ada has spent eight years making search engines return the right answer. They led the migration of Northwind\'s product search from a hand-tuned BM25 stack to hybrid retrieval, and now work on evaluation harnesses for RAG systems that have to be right rather than merely plausible.',
     linkedin: 'https://linkedin.com/in/ada-okonkwo',
     github: 'https://github.com/adaokonkwo',
   },
@@ -456,6 +456,16 @@ export interface PersonaSeed {
  * some personas have one link, some two, some all three.
  */
 export const PERSONAS: PersonaSeed[] = [
+  {
+    id: 'u-robin', name: 'Robin Patel', headline: 'Computer Vision Engineer at Atlas Robotics',
+    cluster: 'AI infrastructure', interests: ['computer-vision', 'robotics', 'python', 'ml-ops', 'ai-agents'],
+    resumeText: 'Synthetic resume: Built object detection and visual perception systems for warehouse robots. Works on autonomous navigation, motion planning and deployment of vision models. Interested in agent orchestration and evaluation for reliable robotic systems.',
+  },
+  {
+    id: 'u-samira', name: 'Samira Brooks', headline: 'Robotics Research Engineer at Fernpath',
+    cluster: 'AI infrastructure', interests: ['robotics', 'computer-vision', 'evals', 'python', 'architecture'],
+    resumeText: 'Synthetic resume: Researches robotic manipulation, camera calibration and computer vision. Built safety evaluations for autonomous systems and open-source perception pipelines. Previously the first engineer at a robotics startup.',
+  },
   // ---- Cluster: AI infrastructure ----
   {
     id: 'u-nadia',

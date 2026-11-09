@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { es, INDEX } from '@/lib/es';
 import { clearCurrentUser, getCurrentUser, setCurrentUserId } from '@/lib/session';
 import { enrichProfile, tagTalks, tagsFromKeywords } from '@/lib/ai';
-import { getTalk } from '@/lib/search';
+import { getTalk, listEvents } from '@/lib/search';
 import { isInterest } from '@/lib/taxonomy';
 import { getInputMode } from '@/lib/input-mode';
 import { errorAttrs, log } from '@/lib/log';
@@ -74,6 +74,7 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
   const linkedin = String(formData.get('linkedin') ?? '').trim();
   const github = String(formData.get('github') ?? '').trim();
   const resumeText = String(formData.get('resumeText') ?? '').trim();
+  const eventId = String(formData.get('eventId') ?? '');
   const inputMode = await getInputMode();
 
   const result = await startSpan(
@@ -108,6 +109,10 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
         );
       }
 
+      if (!(await listEvents()).some((event) => event.id === eventId)) {
+        return rejectOnboarding(span, 'invalid_event', 'Choose an available conference.');
+      }
+
       const enriched = await enrichProfile({ name, interests, linkedin, github, resumeText });
       const aiEnriched = enriched.source === 'claude';
 
@@ -124,6 +129,8 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
         .slice(0, 4000);
 
       const doc: Omit<User, 'id'> & { semantic?: string } = {
+        discoveryOptIn: formData.get('discoveryOptIn') === 'on',
+        eventIds: [eventId],
         name,
         headline: enriched.headline,
         summary: enriched.summary,

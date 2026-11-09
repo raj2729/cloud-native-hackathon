@@ -1,3 +1,4 @@
+import './env';
 /**
  * Idempotent Elasticsearch setup: trial license, the e5 inference endpoint that
  * backs every `semantic_text` field, and the four index mappings.
@@ -27,6 +28,14 @@ const textWithKeyword: MappingProperty = {
 };
 
 const MAPPINGS: Record<string, MappingTypeMapping> = {
+  [INDEX.operations]: {
+    dynamic: 'strict',
+    properties: {
+      at: { type: 'date' }, operation: { type: 'keyword' }, outcome: { type: 'keyword' },
+      durationMs: { type: 'double' }, provider: { type: 'keyword' }, traceId: { type: 'keyword' },
+      requestId: { type: 'keyword' }, serviceVersion: { type: 'keyword' },
+    },
+  },
   [INDEX.events]: {
     properties: {
       name: textWithKeyword,
@@ -81,12 +90,17 @@ const MAPPINGS: Record<string, MappingTypeMapping> = {
       cluster: { type: 'keyword' },
       avatarSeed: { type: 'keyword', index: false },
       isSeeded: { type: 'boolean' },
+      discoveryOptIn: { type: 'boolean' },
+      eventIds: { type: 'keyword' },
       links: {
         type: 'object',
         properties: {
           linkedin: { type: 'keyword', index: false },
           github: { type: 'keyword', index: false },
           resumeText: { type: 'text' },
+          githubBio: { type: 'text' },
+          repositoryDescriptions: { type: 'text' },
+          linkedinBio: { type: 'text' },
         },
       },
       profileText: { type: 'text' },
@@ -169,7 +183,9 @@ async function ensureIndex(name: string, semantic: boolean): Promise<void> {
     await es.indices.create({
       index: name,
       mappings,
-      settings: { number_of_shards: 1, number_of_replicas: 0 },
+      ...(process.env.ELASTICSEARCH_API_KEY ? {} : {
+        settings: { number_of_shards: 1, number_of_replicas: 0 },
+      }),
     });
     console.log(`✓ created index "${name}"${mappings.properties!.semantic ? ' (+semantic)' : ''}`);
     return;
@@ -183,6 +199,7 @@ async function ensureIndex(name: string, semantic: boolean): Promise<void> {
   }
 
   const mapping = await es.indices.getMapping({ index: name });
+  await es.indices.putMapping({ index: name, properties: MAPPINGS[name].properties });
   const props = Object.values(mapping)[0]?.mappings?.properties ?? {};
   if ('semantic' in props) {
     console.log(`✓ index "${name}" exists (+semantic)`);
@@ -206,6 +223,11 @@ function describe(err: unknown): string {
 }
 
 async function waitForCluster(attempts = 30): Promise<void> {
+  if (process.env.ELASTICSEARCH_API_KEY) {
+    const info = await es.info();
+    console.log(`✓ connected to "${info.cluster_name}"`);
+    return;
+  }
   for (let i = 0; i < attempts; i++) {
     try {
       const health = await es.cluster.health({ wait_for_status: 'yellow', timeout: '5s' });
@@ -221,7 +243,7 @@ async function waitForCluster(attempts = 30): Promise<void> {
 
 async function main(): Promise<void> {
   await waitForCluster();
-  await startTrialLicense();
+  if (!process.env.ELASTICSEARCH_API_KEY) await startTrialLicense();
   const semantic = await createInferenceEndpoint();
 
   for (const name of Object.values(INDEX)) {

@@ -1,3 +1,4 @@
+import './env';
 /**
  * Puts live traffic on the conference floor so the dashboard actually moves.
  * Without this, /live renders correct-but-static numbers and reads as fake.

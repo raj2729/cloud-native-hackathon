@@ -1,0 +1,52 @@
+{
+  "apiVersion": "openslo/v1",
+  "kind": "SLO",
+  "metadata": {
+    "name": "converge-generation-latency",
+    "labels": {
+      "team": "conference",
+      "dash0.com/origin": "converge-generation-latency",
+      "dash0.com/dataset": "default"
+    }
+  },
+  "spec": {
+    "service": "confluence",
+    "description": "generation latency: OK operations within 12000ms.",
+    "budgetingMethod": "Occurrences",
+    "indicator": {
+      "spec": {
+        "ratioMetric": {
+          "counter": true,
+          "good": {
+            "metricSource": {
+              "type": "Prometheus",
+              "spec": {
+                "query": "{otel_metric_name=\"app.operation.slo\",service_name=\"confluence\",app_operation=\"generation\",app_slo=\"latency\",app_good=\"true\"}"
+              }
+            }
+          },
+          "total": {
+            "metricSource": {
+              "type": "Prometheus",
+              "spec": {
+                "query": "{otel_metric_name=\"app.operation.slo\",service_name=\"confluence\",app_operation=\"generation\",app_slo=\"latency\"}"
+              }
+            }
+          }
+        }
+      }
+    },
+    "timeWindow": [
+      {
+        "duration": "28d",
+        "isRolling": true
+      }
+    ],
+    "objectives": [
+      {
+        "displayName": "Generation latency",
+        "target": 0.99
+      }
+    ]
+  }
+}

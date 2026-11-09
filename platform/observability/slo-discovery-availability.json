@@ -1,0 +1,52 @@
+{
+  "apiVersion": "openslo/v1",
+  "kind": "SLO",
+  "metadata": {
+    "name": "converge-discovery-availability",
+    "labels": {
+      "team": "conference",
+      "dash0.com/origin": "converge-discovery-availability",
+      "dash0.com/dataset": "default"
+    }
+  },
+  "spec": {
+    "service": "confluence",
+    "description": "discovery availability: No error or excerpt fallback.",
+    "budgetingMethod": "Occurrences",
+    "indicator": {
+      "spec": {
+        "ratioMetric": {
+          "counter": true,
+          "good": {
+            "metricSource": {
+              "type": "Prometheus",
+              "spec": {
+                "query": "{otel_metric_name=\"app.operation.slo\",service_name=\"confluence\",app_operation=\"discovery\",app_slo=\"availability\",app_good=\"true\"}"
+              }
+            }
+          },
+          "total": {
+            "metricSource": {
+              "type": "Prometheus",
+              "spec": {
+                "query": "{otel_metric_name=\"app.operation.slo\",service_name=\"confluence\",app_operation=\"discovery\",app_slo=\"availability\"}"
+              }
+            }
+          }
+        }
+      }
+    },
+    "timeWindow": [
+      {
+        "duration": "28d",
+        "isRolling": true
+      }
+    ],
+    "objectives": [
+      {
+        "displayName": "Discovery availability",
+        "target": 0.995
+      }
+    ]
+  }
+}

@@ -10,7 +10,7 @@ async function submit(_prev: OnboardingResult, formData: FormData): Promise<Onbo
   return createProfile(formData);
 }
 
-export function OnboardingForm() {
+export function OnboardingForm({ events }: { events: { id: string; name: string }[] }) {
   const [state, action, pending] = useActionState<OnboardingResult, FormData>(submit, {});
   const [selected, setSelected] = useState<string[]>([]);
 
@@ -128,6 +128,16 @@ export function OnboardingForm() {
         </div>
       </fieldset>
 
+      <label className="block text-sm">Conference
+        <select name="eventId" className="input mt-2" required>
+          {events.map((event) => <option value={event.id} key={event.id}>{event.name}</option>)}
+        </select>
+      </label>
+      <label className="flex items-start gap-3 text-sm text-muted">
+        <input type="checkbox" name="discoveryOptIn" className="mt-1 size-4" />
+        Make my profile discoverable at the selected conference, including in assistant answers.
+      </label>
+
       {state.error && (
         <p className="text-sm text-hot card p-3 border-hot/30 bg-hot/5">{state.error}</p>
       )}
@@ -142,7 +152,7 @@ export function OnboardingForm() {
         </button>
         {pending && (
           <span className="text-xs text-muted-dim">
-            Claude is reading your links and writing your profile.
+            Preparing your profile from the information you provided.
           </span>
         )}
       </div>

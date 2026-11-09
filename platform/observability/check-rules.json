@@ -1,0 +1,93 @@
+{
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PrometheusRule",
+  "metadata": {
+    "name": "converge-operations",
+    "labels": {
+      "dash0.com/dataset": "default"
+    },
+    "annotations": {
+      "dash0-enabled": "false"
+    }
+  },
+  "spec": {
+    "groups": [
+      {
+        "name": "Converge operations",
+        "interval": "1m",
+        "rules": [
+          {
+            "alert": "Converge discovery latency",
+            "expr": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"app.operation.duration\",service_name=\"confluence\",app_operation=\"discovery\"}[5m]))) > 15000",
+            "for": "5m",
+            "labels": {
+              "team": "conference",
+              "service_name": "confluence",
+              "severity": "warning"
+            },
+            "annotations": {
+              "summary": "Discovery p95 exceeded 15s for 5 minutes",
+              "description": "Compare retrieval and generation spans; inspect provider errors and correlate request IDs."
+            }
+          },
+          {
+            "alert": "Converge retrieval latency",
+            "expr": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"app.operation.duration\",service_name=\"confluence\",app_operation=\"retrieval\"}[5m]))) > 3000",
+            "for": "5m",
+            "labels": {
+              "team": "conference",
+              "service_name": "confluence",
+              "severity": "warning"
+            },
+            "annotations": {
+              "summary": "Retrieval p95 exceeded 3s for 5 minutes",
+              "description": "Compare retrieval and generation spans; inspect provider errors and correlate request IDs."
+            }
+          },
+          {
+            "alert": "Converge generation latency",
+            "expr": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"app.operation.duration\",service_name=\"confluence\",app_operation=\"generation\"}[5m]))) > 12000",
+            "for": "5m",
+            "labels": {
+              "team": "conference",
+              "service_name": "confluence",
+              "severity": "warning"
+            },
+            "annotations": {
+              "summary": "Generation p95 exceeded 12s for 5 minutes",
+              "description": "Compare retrieval and generation spans; inspect provider errors and correlate request IDs."
+            }
+          },
+          {
+            "alert": "Converge answer fallback",
+            "expr": "(sum(increase({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"generation\",app_outcome=\"fallback\"}[5m])) > 0)",
+            "for": "2m",
+            "labels": {
+              "team": "conference",
+              "service_name": "confluence",
+              "severity": "warning"
+            },
+            "annotations": {
+              "summary": "Conference answers are falling back to excerpts",
+              "description": "Check provider credentials, rate limits, timeouts and citation validation."
+            }
+          },
+          {
+            "alert": "Converge telemetry missing",
+            "expr": "absent_over_time({otel_metric_name=\"app.operation.requests\",service_name=\"confluence\",app_operation=\"discovery\"}[15m])",
+            "for": "5m",
+            "labels": {
+              "team": "conference",
+              "service_name": "confluence",
+              "severity": "warning"
+            },
+            "annotations": {
+              "summary": "No discovery telemetry for 15 minutes",
+              "description": "Expected traffic only: verify OTel credentials, exporter and service health; quiet conferences can legitimately have no traffic."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

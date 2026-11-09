@@ -159,11 +159,14 @@ export async function getTalkAttendeeCounts(talkIds: string[]): Promise<Map<stri
     index: INDEX.attendance,
     size: 0,
     query: { terms: { talkId: talkIds } },
-    aggs: { per_talk: { terms: { field: 'talkId', size: talkIds.length } } },
+    aggs: { per_talk: {
+      terms: { field: 'talkId', size: talkIds.length },
+      aggs: { people: { cardinality: { field: 'userId' } } },
+    } },
   });
-  const buckets = (res.aggregations?.per_talk as { buckets?: { key: string; doc_count: number }[] })
+  const buckets = (res.aggregations?.per_talk as { buckets?: { key: string; people: { value: number } }[] })
     ?.buckets ?? [];
-  for (const bucket of buckets) counts.set(bucket.key, bucket.doc_count);
+  for (const bucket of buckets) counts.set(bucket.key, bucket.people.value);
   return counts;
 }
 
@@ -641,4 +644,163 @@ export async function getNowPlaying(eventId: string): Promise<Talk[]> {
     },
   });
   return hitsToDocs(res.hits.hits);
+}
+
+// Natural-language discovery uses separate retrievers so the UI can explain
+// actual contributions, including when inference is temporarily unavailable.
+export async function discoverConference(
+  input: import('./discovery').DiscoveryInput,
+  viewer: User | null,
+): Promise<import('./discovery').DiscoveryResult> {
+  const started = Date.now();
+  const warnings: string[] = [];
+  const sources: import('./discovery').DiscoverySource[] = [];
+  let semanticUsed = false;
+  let retrieved = 0;
+  const query = input.query.trim();
+  const kinds = input.kind === 'all' ? ['talk', 'person'] : [input.kind === 'talks' ? 'talk' : 'person'];
+
+  await Promise.all(kinds.map(async (kind) => {
+    const index = kind === 'talk' ? INDEX.talks : INDEX.users;
+    const filters: Record<string, unknown>[] = kind === 'talk'
+      ? [{ term: { eventId: input.eventId } }]
+      : [{ term: { discoveryOptIn: true } }, { term: { eventIds: input.eventId } }];
+    if (input.tag) filters.push(kind === 'talk'
+      ? { term: { tags: input.tag } }
+      : { bool: { should: [{ term: { interests: input.tag } }, { term: { derivedTags: input.tag } }], minimum_should_match: 1 } });
+    const fields = kind === 'talk'
+      ? ['title^3', 'abstract', 'speaker.name^2', 'speaker.bio', 'speaker.company', 'tags^2']
+      : ['name^3', 'headline^2', 'summary', 'profileText', 'interests^2', 'derivedTags', 'links.resumeText', 'links.githubBio', 'links.repositoryDescriptions', 'links.linkedinBio'];
+    const lexical = await search<Omit<Talk, 'id'> | Omit<User, 'id'>>({
+      index, size: 40, _source: { excludes: ['semantic'] },
+      query: { bool: { filter: filters, must: [{ multi_match: { query, fields } }] } },
+    });
+    const keywordDocs = hitsToScoredDocs(lexical.hits.hits);
+    let semanticDocs: typeof keywordDocs = [];
+    try {
+      const mapping = await es.indices.getMapping({ index });
+      if (Object.values(mapping).some((m) => m.mappings?.properties?.semantic?.type === 'semantic_text')) {
+        const response = await search<Omit<Talk, 'id'> | Omit<User, 'id'>>({
+          index, size: 40, _source: { excludes: ['semantic'] },
+          query: { bool: { filter: filters, must: [{ semantic: { field: 'semantic', query } }] } },
+        });
+        semanticDocs = hitsToScoredDocs(response.hits.hits);
+        semanticUsed = true;
+      } else {
+        warnings.push(`${kind === 'talk' ? 'Talk' : 'People'} embeddings are not configured; using keyword search.`);
+      }
+    } catch {
+      warnings.push(`${kind === 'talk' ? 'Talk' : 'People'} semantic retrieval is unavailable; keyword search remains active.`);
+    }
+    const docs = new Map([...keywordDocs, ...semanticDocs].map((doc) => [doc.id, doc]));
+    retrieved += docs.size;
+    const keywordRanks = new Map(keywordDocs.map((doc, i) => [doc.id, i + 1]));
+    const semanticRanks = new Map(semanticDocs.map((doc, i) => [doc.id, i + 1]));
+    const ids = [...docs.keys()];
+    const counts = kind === 'talk' ? await getTalkAttendeeCounts(ids) : new Map<string, number>();
+    const myTalks = viewer ? await getMyTalkIds(viewer.id) : new Set<string>();
+    const peers = kind === 'person' ? await getAttendanceForUsers(ids) : new Map<string, string[]>();
+    const similar = viewer && kind === 'talk' ? await similarPeopleAttending(viewer, input.eventId, 40) : [];
+    const social = new Map(similar.map((row) => [row.talk.id, row.peerCount]));
+    for (const doc of docs.values()) {
+      const talk = kind === 'talk' ? doc as Talk : null;
+      const person = kind === 'person' ? doc as User : null;
+      const tags = talk?.tags ?? [...(person?.interests ?? []), ...(person?.derivedTags ?? [])];
+      const overlap = viewer?.interests.filter((tag) => tags.includes(tag)).length ?? 0;
+      // Reciprocal ranks keep BM25 and embedding scores comparable. Behavioural
+      // bonuses are capped so popularity cannot overwhelm query relevance.
+      const signals = {
+        keyword: keywordRanks.has(doc.id) ? 1 / (20 + keywordRanks.get(doc.id)!) : 0,
+        semantic: semanticRanks.has(doc.id) ? 1 / (20 + semanticRanks.get(doc.id)!) : 0,
+        interests: Math.min(overlap, 5) * 0.002,
+        popularity: Math.min(counts.get(doc.id) ?? 0, 100) * 0.00005,
+        social: Math.min(talk ? social.get(doc.id) ?? 0 : (peers.get(doc.id) ?? []).filter((id) => myTalks.has(id)).length, 10) * 0.001,
+      };
+      sources.push({
+        id: doc.id, citation: '', kind: kind as 'talk' | 'person',
+        title: talk?.title ?? person!.name,
+        excerpt: talk ? `${talk.abstract} Speaker: ${talk.speaker.name}. ${talk.speaker.bio}` : `${person!.headline}. ${person!.summary}`,
+        href: talk ? `/talks/${encodeURIComponent(doc.id)}` : `/people#${encodeURIComponent(doc.id)}`,
+        tags: [...new Set(tags)], signals, attendees: counts.get(doc.id) ?? 0,
+        ...(talk ? { session: { rooms: talk.rooms, startsAt: talk.startsAt, endsAt: talk.endsAt, speaker: talk.speaker.name, track: talk.track } } : {}),
+      });
+    }
+  }));
+
+  // Multi-hop retrieval: use the matched people's saved sessions as evidence
+  // for questions such as "What are people interested in robotics attending?".
+  if (input.assistant && /attend|going to|watching/i.test(query) && input.kind !== 'talks') {
+    const people = sources.filter((s) => s.kind === 'person').slice(0, 10);
+    const attendance = await getAttendanceForUsers(people.map((p) => p.id));
+    const talks = await getTalksByIds([...new Set([...attendance.values()].flat())]);
+    for (const talk of talks.values()) {
+      if (talk.eventId !== input.eventId || (input.tag && !talk.tags.includes(input.tag))) continue;
+      const names = people.filter((p) => attendance.get(p.id)?.includes(talk.id)).map((p) => p.title);
+      const existing = sources.find((s) => s.kind === 'talk' && s.id === talk.id);
+      const evidence = ` Matched attendees who saved or checked into this session: ${names.join(', ')}.`;
+      if (existing) { existing.excerpt += evidence; existing.signals.social += Math.min(names.length, 10) * 0.001; }
+      else sources.push({ id: talk.id, citation: '', kind: 'talk', title: talk.title,
+        session: { rooms: talk.rooms, startsAt: talk.startsAt, endsAt: talk.endsAt, speaker: talk.speaker.name, track: talk.track },
+        excerpt: talk.abstract + evidence, href: `/talks/${encodeURIComponent(talk.id)}`, tags: talk.tags,
+        signals: { keyword: 0, semantic: 0, interests: 0, popularity: 0, social: Math.min(names.length, 10) * 0.01 }, attendees: names.length });
+    }
+  }
+  const score = (source: import('./discovery').DiscoverySource): number => Object.values(source.signals).reduce((sum, n) => sum + n, 0);
+  sources.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
+  const selected = input.kind === 'all'
+    ? [...sources.filter((s) => s.kind === 'talk').slice(0, 6), ...sources.filter((s) => s.kind === 'person').slice(0, 6)].sort((a, b) => score(b) - score(a))
+    : sources.slice(0, 12);
+  selected.forEach((source, i) => { source.citation = `S${i + 1}`; });
+  return { query, sources: selected, semantic: semanticUsed, warnings: [...new Set(warnings)],
+    elapsedMs: Date.now() - started, retrieved, generation: 'none' };
+}
+
+// Admin metrics use their own index and never retain attendee content.
+export async function persistOperation(record: import('./observability').OperationRecord): Promise<void> {
+  try {
+    const { id, ...document } = record;
+    await es.index({ index: INDEX.operations, id, document }, { requestTimeout: 1000, maxRetries: 0 });
+  } catch { /* A monitoring write cannot interrupt discovery. */ }
+}
+
+export async function getObservabilitySnapshot(minutes: number, operation: import('./observability').Operation): Promise<import('./observability').ObservabilitySnapshot> {
+  const { TARGETS } = await import('./observability');
+  const ranges = [
+    { key: '< 0.5s', to: 500 }, { key: '0.5–1s', from: 500, to: 1000 },
+    { key: '1–3s', from: 1000, to: 3000 }, { key: '3–5s', from: 3000, to: 5000 },
+    { key: '5–12s', from: 5000, to: 12000 }, { key: '12–15s', from: 12000, to: 15000 }, { key: '≥ 15s', from: 15000 },
+  ];
+  const response = await es.search<Omit<import('./observability').OperationRecord, 'id'>>({
+    index: INDEX.operations, size: 15, track_total_hits: true, sort: [{ at: 'desc' }],
+    query: { bool: { filter: [{ range: { at: { gte: `now-${minutes}m`, lte: 'now' } } }, { term: { operation } }] } },
+    aggs: {
+      errors: { filter: { term: { outcome: 'error' } } },
+      fallbacks: { filter: { term: { outcome: 'fallback' } } },
+      goodLatency: { filter: { bool: { filter: [{ term: { outcome: 'ok' } }, { range: { durationMs: { lte: TARGETS[operation] } } }] } } },
+      latency: { percentiles: { field: 'durationMs', percents: [50, 95, 99] } },
+      histogram: { range: { field: 'durationMs', ranges } },
+      timeline: { date_histogram: { field: 'at', fixed_interval: minutes > 60 ? '5m' : minutes > 15 ? '1m' : '10s', min_doc_count: 0, extended_bounds: { min: `now-${minutes}m`, max: 'now' } }, aggs: {
+        latency: { percentiles: { field: 'durationMs', percents: [95] } },
+        errors: { filter: { term: { outcome: 'error' } } }, fallbacks: { filter: { term: { outcome: 'fallback' } } },
+      } },
+      incidents: { filter: { bool: { should: [{ terms: { outcome: ['error', 'fallback'] } }, { range: { durationMs: { gt: TARGETS[operation] } } }], minimum_should_match: 1 } },
+        aggs: { latest: { top_hits: { size: 15, sort: [{ at: 'desc' }] } } } },
+    },
+  }, { requestTimeout: 5000, maxRetries: 0 });
+  // These aggregation shapes are fixed by the query above.
+  const agg = response.aggregations as unknown as {
+    errors: { doc_count: number }; fallbacks: { doc_count: number }; goodLatency: { doc_count: number };
+    latency: { values: Record<string, number | null> };
+    histogram: { buckets: { key: string; doc_count: number }[] };
+    timeline: { buckets: { key: number; doc_count: number; latency: { values: Record<string, number | null> }; errors: { doc_count: number }; fallbacks: { doc_count: number } }[] };
+    incidents: { latest: { hits: { hits: import('./es').RawHit<Omit<import('./observability').OperationRecord, 'id'>>[] } } };
+  };
+  return { minutes, operation,
+    total: typeof response.hits.total === 'number' ? response.hits.total : response.hits.total?.value ?? 0,
+    errors: agg.errors.doc_count, fallbacks: agg.fallbacks.doc_count, goodLatency: agg.goodLatency.doc_count,
+    p50: agg.latency.values['50.0'], p95: agg.latency.values['95.0'], p99: agg.latency.values['99.0'],
+    histogram: agg.histogram.buckets.map((bucket) => ({ label: bucket.key, count: bucket.doc_count })),
+    timeline: agg.timeline.buckets.map((bucket) => ({ at: bucket.key, count: bucket.doc_count, p95: bucket.latency.values['95.0'], errors: bucket.errors.doc_count, fallbacks: bucket.fallbacks.doc_count })),
+    incidents: hitsToDocs(agg.incidents.latest.hits.hits), recent: hitsToDocs(response.hits.hits),
+  };
 }

@@ -132,7 +132,7 @@ Radar's desktop app runs locally and reads the cluster through your kubeconfig. 
 
 The Elasticsearch settings below are for local development only: security is disabled, with no public Service or Ingress. Give Docker Desktop at least 4 GB of memory (6 GB recommended when enabling the e5 model).
 
-For a hosted Elastic Cloud cluster instead of the in-cluster Elasticsearch, set `ELASTICSEARCH_URL` to its HTTPS endpoint and `ELASTICSEARCH_API_KEY` to an API key. No local software installation is needed. The Next.js app can load these values from `platform/.env.local` (which is gitignored). For setup/seed scripts, export the values in the shell or prefix the commands with them. Use a least-privilege key for the app, and a separate appropriately privileged key for index/model setup if required.
+For a hosted Elastic Cloud cluster instead of the in-cluster Elasticsearch, set `ELASTICSEARCH_URL` to its HTTPS endpoint and `ELASTICSEARCH_API_KEY` to an API key. No local software installation is needed. The Next.js app can load these values from `platform/.env.local` (which is gitignored). Setup and seed scripts also load `.env.local`; exported shell values take precedence. Use a least-privilege key for the app, and a separate appropriately privileged key for index/model setup if required.
 
 For local development, create `platform/.env.local` with:
 
@@ -253,3 +253,103 @@ kubectl delete -f k8s/elasticsearch.yaml
 ```
 
 The Elasticsearch PVC is retained when the StatefulSet is removed. Delete `data-elasticsearch-0` explicitly only if you also intend to erase the local Elasticsearch data.
+## Natural-language discovery and the conference assistant
+
+Open `/discover` from the navigation or home page. Search talks, opted-in people,
+professional bios and skills; filter by conference and interest. The assistant
+retrieves conference evidence before answering, links every citation to its source,
+and shows a selectable ranking breakdown and retrieval flow. Attendance questions
+also join matched people to saved/check-in records. Ranking combines reciprocal
+keyword and semantic ranks with capped interest, popularity and social bonuses.
+Bars explain contributions; they are not confidence percentages.
+
+Voice search uses the browser SpeechRecognition API on HTTPS or localhost. It is
+started only by the microphone button, and the transcript can be edited before
+submission. Browsers without speech support retain the same typed search. The page
+supports keyboard navigation, visible focus, screen-reader status messages, reduced
+motion and a skip link. Speech may be processed by the browser provider.
+
+Use **Node 22.15 or later** for the Elasticsearch and telemetry dependencies.
+Copy `.env.example` to `.env.local` and set these server-only values:
+
+```dotenv
+ELASTICSEARCH_URL=https://your-deployment.es.region.provider.elastic.cloud:443
+ELASTICSEARCH_API_KEY=your-encoded-api-key
+ELASTICSEARCH_INFERENCE_ID=.elser-2-elastic
+ELASTICSEARCH_COMPLETION_ID=.gp-llm-v2-completion
+```
+
+Choose endpoints available in your cluster. No browser environment variable should
+contain the key. CLI scripts also load `.env.local`. On Elastic Cloud, run:
+
+```sh
+npm ci
+npm run es:setup
+npm run es:seed
+npm run dev
+```
+
+Setup reuses the configured inference endpoint and supports Serverless, without
+attempting to change its licence or shard settings. Seed upserts the synthetic demo
+documents and preserves unrelated data. `npm run es:seed -- --reset` explicitly
+clears the four app indices first. Do not use that option on shared data.
+
+The demo contains synthetic resumes, GitHub bios/repository summaries and LinkedIn
+bios, including robotics and computer-vision profiles. No scraping or account
+integration runs. New profiles explicitly opt into discovery for their selected
+conference. Existing profiles without opt-in are excluded from discovery.
+
+If embeddings are missing or inference fails, discovery returns keyword results
+with a visible notice. If completion fails, is disabled with `AI_ENABLED=false`, or
+returns invalid citations, the assistant shows labelled source excerpts instead.
+An empty evidence set does not call a model. This demo uses a profile-switch cookie,
+not production authentication; add authentication and rate limits before public use.
+
+After seeding, verify the live integration with:
+
+```sh
+npm run test:discovery
+npm run verify:discovery
+npm run typecheck
+npm run lint
+npm run build
+```
+
+Elasticsearch generates embeddings for `semantic_text` fields using the configured
+inference endpoint: [Elastic semantic-text documentation](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/semantic-text).
+
+If completion inference returns HTTP 403 while embeddings work, enable access to a
+completion model in your Elastic project and set `ELASTICSEARCH_COMPLETION_ID` to
+that endpoint. The assistant keeps returning cited excerpts while access is unavailable.
+
+### OpenAI answer generation
+
+Set `OPENAI_API_KEY` in the ignored server-only `.env.local` to generate answers
+with OpenAI's Responses API using evidence retrieved by Elasticsearch. This takes
+precedence over `ELASTICSEARCH_COMPLETION_ID` and bypasses Elastic-managed model
+entitlement issues. `OPENAI_MODEL` defaults to `gpt-4.1-mini`. Requests use
+`store: false`, a 25-second timeout and a bounded output. Only the selected source
+excerpts and question are sent. Invalid citations, refusals and API failures return
+the labelled excerpt fallback. Restart the app after changing environment values.
+
+`npm run verify:discovery` requires an actual OpenAI-generated answer when an OpenAI
+key is configured; a silent fallback fails that check. The UI shows the generated
+answer and citations in the same retrieval visualisation.
+
+## Admin service-health dashboard
+
+Open `/admin` and enter `ADMIN_ACCESS_TOKEN` from your server environment. The
+admin dashboard includes live application latency charts, histograms, reliability
+targets, degraded-answer counts and incident triage. Dash0 API panels, dashboard
+links, Slack alert routing, CI gates and MCP setup are described in
+[the observability guide](docs/observability.md). Dash0 credentials are optional;
+without them the admin page explicitly shows the real app measurements and the
+remaining account-configuration steps. Configuration templates are in
+`observability/`. `npm test` runs discovery and observability regression tests.
+
+
+The admin chart polls real application measurements every 2 seconds, independently
+of the Dash0 panels. It includes a last-update timestamp and pause/refresh controls.
+The MCP investigation card connects to Dash0 and runs a fixed read-only latency
+query; `npm run verify:mcp` verifies available tools. See the observability guide
+for authentication, metric freshness and the limits of this integration.

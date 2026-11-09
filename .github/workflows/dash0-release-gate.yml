@@ -1,0 +1,31 @@
+name: Dash0 Release Gate
+
+# Explicit invocation only: this checks existing service telemetry, not a PR deployment.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reliability:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: platform/package-lock.json
+      - run: npm ci
+      - name: Check observed service reliability
+        run: npm run dash0:gate
+        env:
+          DASH0_API_ENDPOINT: ${{ secrets.DASH0_API_ENDPOINT }}
+          DASH0_API_TOKEN: ${{ secrets.DASH0_API_TOKEN }}
+          DASH0_DATASET: ${{ vars.DASH0_DATASET || 'default' }}
+          OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME || 'converge' }}
+          DASH0_GATE_MIN_REQUESTS: '20'

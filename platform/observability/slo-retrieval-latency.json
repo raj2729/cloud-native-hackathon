@@ -1,0 +1,52 @@
+{
+  "apiVersion": "openslo/v1",
+  "kind": "SLO",
+  "metadata": {
+    "name": "converge-retrieval-latency",
+    "labels": {
+      "team": "conference",
+      "dash0.com/origin": "converge-retrieval-latency",
+      "dash0.com/dataset": "default"
+    }
+  },
+  "spec": {
+    "service": "confluence",
+    "description": "retrieval latency: OK operations within 3000ms.",
+    "budgetingMethod": "Occurrences",
+    "indicator": {
+      "spec": {
+        "ratioMetric": {
+          "counter": true,
+          "good": {
+            "metricSource": {
+              "type": "Prometheus",
+              "spec": {
+                "query": "{otel_metric_name=\"app.operation.slo\",service_name=\"confluence\",app_operation=\"retrieval\",app_slo=\"latency\",app_good=\"true\"}"
+              }
+            }
+          },
+          "total": {
+            "metricSource": {
+              "type": "Prometheus",
+              "spec": {
+                "query": "{otel_metric_name=\"app.operation.slo\",service_name=\"confluence\",app_operation=\"retrieval\",app_slo=\"latency\"}"
+              }
+            }
+          }
+        }
+      }
+    },
+    "timeWindow": [
+      {
+        "duration": "28d",
+        "isRolling": true
+      }
+    ],
+    "objectives": [
+      {
+        "displayName": "Retrieval latency",
+        "target": 0.99
+      }
+    ]
+  }
+}
