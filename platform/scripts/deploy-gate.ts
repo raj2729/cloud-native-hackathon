@@ -1,10 +1,14 @@
 /**
  * CI latency gate.
  *
- * Compares p95 latency per operation between two windows — in CI, the PR's base
- * build vs. its head build, each driven by the same synthetic traffic —
- * using Dash0's Prometheus-compatible query API over the span-derived
- * `dash0.spans.duration` metric. When an operation regresses it:
+ * Compares p95 latency per operation between a base and a head. Two sources:
+ *
+ *   - GATE_RESULTS_FILE: the output of scripts/latency-ab.ts, a paired A/B of
+ *     two builds running side by side (what CI uses — ~25s, no ingestion wait);
+ *   - otherwise Dash0's Prometheus-compatible query API over the span-derived
+ *     `dash0.spans.duration` metric, comparing two time windows.
+ *
+ * When an operation regresses it:
  *
  *   1. calls an Agent0 Automation webhook with the numbers, commits and a diff
  *      link, so Agent0 runs a root-cause analysis and posts it to Slack;
@@ -21,7 +25,7 @@
  * Required env: DASH0_API_URL, DASH0_AUTH_TOKEN
  * Optional env: see `config` below.
  */
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -68,6 +72,8 @@ const config = {
   minDeltaMs: num(process.env.LATENCY_MIN_DELTA_MS, 50),
   /** Minimum spans per window for an operation to be compared at all. */
   minSamples: num(process.env.LATENCY_MIN_SAMPLES, 20),
+  /** Local A/B results (scripts/latency-ab.ts); when set, Dash0 is not queried. */
+  resultsFile: process.env.GATE_RESULTS_FILE ?? arg('results') ?? '',
   /** PromQL label for the span name. (verify against your Dash0 data) */
   groupLabel: process.env.GATE_GROUP_LABEL ?? 'otel_span_name',
   failOnRegression: (process.env.FAIL_ON_REGRESSION ?? 'true') !== 'false',
@@ -335,7 +341,43 @@ function summaryTable(rows: Comparison[]): string {
 // Main
 // ---------------------------------------------------------------------------
 
+interface AbResults {
+  startedAt: string;
+  base: Record<string, WindowStats>;
+  head: Record<string, WindowStats>;
+}
+
+/** Base and head stats from a scripts/latency-ab.ts results file. */
+function readResults(path: string): [Map<string, WindowStats>, Map<string, WindowStats>] {
+  const results = JSON.parse(readFileSync(path, 'utf8')) as AbResults;
+  const toMap = (o: Record<string, WindowStats>) =>
+    new Map(Object.entries(o).map(([op, s]) => [op, { p95Ms: s.p95Ms, samples: s.samples }]));
+  config.windowStart = new Date(results.startedAt);
+  config.baselineEnd = config.windowStart;
+  return [toMap(results.base), toMap(results.head)];
+}
+
 async function main(): Promise<void> {
+  if (config.resultsFile) {
+    console.log(
+      `Latency gate for ${config.service} from ${config.resultsFile}: ` +
+        `regression = +${config.thresholdPct}% and +${config.minDeltaMs}ms on p95, n ≥ ${config.minSamples}.`,
+    );
+    let rows: Comparison[];
+    try {
+      const [before, after] = readResults(config.resultsFile);
+      rows = compare(before, after);
+    } catch (err) {
+      const message = (err as Error).message;
+      console.warn(`Inconclusive: ${message}`);
+      writeOutput('regressed', 'unknown');
+      writeSummary(`## ⚪ Latency gate inconclusive\n\n${message}\n`);
+      return;
+    }
+    await report(rows);
+    return;
+  }
+
   if (!config.apiUrl || !config.token) {
     console.error('DASH0_API_URL and DASH0_AUTH_TOKEN are required.');
     process.exit(2);
@@ -368,6 +410,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  await report(rows);
+}
+
+/** Verdict, notifications and summary for a set of comparisons. */
+async function report(rows: Comparison[]): Promise<void> {
   const regressed = rows.filter((r) => r.regressed);
   console.log(summaryTable(rows));
 

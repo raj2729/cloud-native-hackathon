@@ -8,17 +8,17 @@ name: Platform CI
 # runner it:
 #
 #   1. starts a fresh Elasticsearch and seeds it with the deterministic demo data;
-#   2. builds the PR's base commit and the PR itself;
-#   3. runs each build in turn under the same synthetic traffic for
-#      WINDOW_MINUTES, exporting spans to Dash0 as service `confluence-ci`
-#      (service.version = the commit), so base and head are directly comparable;
-#   4. compares p95 per operation (scripts/deploy-gate.ts). On regression it
-#      calls the Agent0 automation webhook — Agent0 runs the RCA against the
-#      traces and the diff and posts to Slack — and fails the PR check.
+#   2. builds the PR's base commit and the PR, and starts both side by side;
+#   3. runs a paired A/B for AB_SECONDS (default 25): every page request goes to
+#      both builds back to back, so both see the same load (scripts/latency-ab.ts);
+#   4. compares p95 per page (scripts/deploy-gate.ts). On regression it calls the
+#      Agent0 automation webhook — Agent0 investigates the spans both builds sent
+#      to Dash0 (service `confluence-ci`, service.version = commit) and the diff,
+#      and posts the RCA to Slack — and fails the PR check.
 #
 # Configuration:
-#   vars:    DASH0_OTLP_URL (ingest), DASH0_API_URL (query), DASH0_DATASET (optional),
-#            AGENT0_WEBHOOK_URL, WINDOW_MINUTES (optional, default 5)
+#   vars:    DASH0_OTLP_URL (span export), DASH0_DATASET (optional),
+#            AGENT0_WEBHOOK_URL, AB_SECONDS (optional)
 #   secrets: DASH0_AUTH_TOKEN, AGENT0_WEBHOOK_SECRET,
 #            SLACK_WEBHOOK_URL (optional; an immediate heads-up before Agent0's RCA)
 #
@@ -35,9 +35,9 @@ on:
       base_ref:
         description: Branch or commit to compare the selected ref against
         default: main
-      window_minutes:
-        description: Minutes of traffic per build
-        default: '5'
+      ab_seconds:
+        description: Seconds of paired A/B traffic
+        default: '25'
       fail_on_regression:
         description: Fail the run when latency regresses
         type: boolean
@@ -86,11 +86,11 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    # Runs share one Dash0 service name; one at a time keeps windows apart.
+    timeout-minutes: 20
+    # A newer push to the same PR supersedes the running comparison.
     concurrency:
-      group: platform-latency
-      cancel-in-progress: false
+      group: latency-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     services:
       elasticsearch:
         image: public.ecr.aws/elastic/elasticsearch:9.5.1
@@ -98,7 +98,7 @@ jobs:
           discovery.type: single-node
           xpack.security.enabled: 'false'
           # No ML: semantic ranking stays off, so the e5 model finishing its
-          # deployment mid-run cannot shift latency between the two windows.
+          # deployment mid-run cannot make one build look slower.
           xpack.ml.enabled: 'false'
           ES_JAVA_OPTS: -Xms1g -Xmx1g
           cluster.routing.allocation.disk.threshold_enabled: 'false'
@@ -110,7 +110,7 @@ jobs:
       ELASTICSEARCH_URL: http://localhost:9200
       AI_ENABLED: 'false'
       NEXT_TELEMETRY_DISABLED: '1'
-      WINDOW_MINUTES: ${{ inputs.window_minutes || vars.WINDOW_MINUTES || '5' }}
+      AB_SECONDS: ${{ inputs.ab_seconds || vars.AB_SECONDS || '25' }}
       # The app's OTel SDK (instrumentation.node.ts) ships spans to Dash0.
       DASH0_ENDPOINT: ${{ vars.DASH0_OTLP_URL }}
       DASH0_AUTH_TOKEN: ${{ secrets.DASH0_AUTH_TOKEN }}
@@ -130,14 +130,8 @@ jobs:
 
       - name: Check configuration
         run: |
-          missing=""
-          [ -n "$DASH0_ENDPOINT" ]   || missing="$missing DASH0_OTLP_URL"
-          [ -n "$DASH0_AUTH_TOKEN" ] || missing="$missing DASH0_AUTH_TOKEN"
-          [ -n "${{ vars.DASH0_API_URL }}" ] || missing="$missing DASH0_API_URL"
-          if [ -n "$missing" ]; then
-            echo "::error::Latency check needs:$missing"
-            exit 1
-          fi
+          # The verdict needs nothing external; Dash0 and Agent0 power the RCA.
+          [ -n "$DASH0_ENDPOINT" ] && [ -n "$DASH0_AUTH_TOKEN" ] || echo "::warning::DASH0_OTLP_URL / DASH0_AUTH_TOKEN not set — no traces for Agent0 to investigate."
           [ -n "${{ vars.AGENT0_WEBHOOK_URL }}" ] || echo "::warning::AGENT0_WEBHOOK_URL not set — regressions will not get an RCA."
 
       - name: Resolve base commit
@@ -167,27 +161,32 @@ jobs:
       - name: Set up and seed Elasticsearch
         run: npm run es:setup && npm run es:seed
 
-      - name: Measure base (${{ env.WINDOW_MINUTES }} min)
-        id: base_window
-        run: scripts/ci-latency-window.sh base "$RUNNER_TEMP/base/platform" "${{ steps.base.outputs.sha }}" "$WINDOW_MINUTES"
+      # Both builds run side by side; spans go to Dash0 for Agent0's RCA.
+      - name: Start base (:3000) and head (:3001)
+        run: |
+          (cd "$RUNNER_TEMP/base/platform" && APP_VERSION="${{ steps.base.outputs.sha }}" \
+            nohup npx next start -p 3000 > "$RUNNER_TEMP/server-base.log" 2>&1 &)
+          APP_VERSION="$HEAD_SHA" nohup npx next start -p 3001 > "$RUNNER_TEMP/server-head.log" 2>&1 &
+          for port in 3000 3001; do
+            for _ in $(seq 1 60); do
+              [ "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$port/agenda")" != "000" ] && break
+              sleep 1
+            done
+          done
 
-      - name: Measure head (${{ env.WINDOW_MINUTES }} min)
-        id: head_window
-        run: scripts/ci-latency-window.sh head "$GITHUB_WORKSPACE/platform" "$HEAD_SHA" "$WINDOW_MINUTES"
-
-      # Spans → span metrics in Dash0 takes a moment; let the head window land.
-      - name: Wait for Dash0 ingestion
-        run: sleep 60
+      - name: Paired latency A/B (${{ env.AB_SECONDS }}s)
+        run: >-
+          npx tsx scripts/latency-ab.ts
+          --base http://localhost:3000 --head http://localhost:3001
+          --seconds "$AB_SECONDS" --workers 10 --out "$RUNNER_TEMP/latency-ab.json"
 
       - name: Compare p95 latency (base vs head)
         id: gate
         env:
-          DASH0_API_URL: ${{ vars.DASH0_API_URL }}
           GATE_SERVICE_NAME: ${{ env.SERVICE_NAME }}
-          BASELINE_END: ${{ steps.base_window.outputs.base_end }}
-          BASELINE_MINUTES: ${{ env.WINDOW_MINUTES }}
-          WINDOW_START: ${{ steps.head_window.outputs.head_start }}
-          BAKE_MINUTES: ${{ env.WINDOW_MINUTES }}
+          GATE_RESULTS_FILE: ${{ runner.temp }}/latency-ab.json
+          LATENCY_MIN_SAMPLES: '15'
+          BAKE_MINUTES: '1'
           COMMIT_SHA: ${{ env.HEAD_SHA }}
           PREVIOUS_SHA: ${{ steps.base.outputs.sha }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -198,6 +197,11 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: npm run deploy:gate
 
+      # Stopping the servers flushes their remaining spans to Dash0.
+      - name: Stop servers
+        if: always()
+        run: pkill -TERM -f "next start" || true
+
       - name: Server logs
         if: failure()
         run: |
@@ -207,7 +211,7 @@ jobs:
 
       # The gate's verdict also lands on the Dash0 timeline.
       - name: Send latency gate result to Dash0
-        if: always() && steps.gate.outcome != 'skipped'
+        if: always() && steps.gate.outcome != 'skipped' && vars.DASH0_OTLP_URL != ''
         uses: dash0hq/dash0-cli/.github/actions/send-log-event@v1.20.0
         with:
           otlp-url: ${{ vars.DASH0_OTLP_URL }}
@@ -226,6 +230,6 @@ jobs:
           vcs-ref-head-revision: ${{ env.HEAD_SHA }}
           other-log-attributes: |
             app.gate.regressed=${{ steps.gate.outputs.regressed || 'unknown' }}
-            app.gate.window_minutes=${{ env.WINDOW_MINUTES }}
+            app.gate.ab_seconds=${{ env.AB_SECONDS }}
             vcs.ref.base.revision=${{ steps.base.outputs.sha }}
             cicd.pipeline.run.url.full=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
