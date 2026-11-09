@@ -11,9 +11,84 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import { SpanKind } from '@opentelemetry/api';
 import { TAG_KEYWORDS, TAXONOMY, TAXONOMY_SET, label, type Interest } from './taxonomy';
+import { recordAiCall, setSpanAttributes, startSpan } from './telemetry';
+import { errorAttrs, log } from './log';
 
 const MODEL = 'claude-opus-5';
+
+// ---------------------------------------------------------------------------
+// Telemetry
+// ---------------------------------------------------------------------------
+
+type AiOperation = 'tag_talks' | 'enrich_profile' | 'match_rationale';
+
+/** What one Claude call produced, plus what Dash0 needs to know about it. */
+interface AiResult<T> {
+  value: T;
+  /** True when the deterministic fallback was returned instead of model output. */
+  fallback: boolean;
+  /** Why the fallback was used: `refusal`, `empty_output`, `error`. */
+  reason?: string;
+  error?: unknown;
+  response?: {
+    model?: string;
+    stop_reason?: string | null;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
+}
+
+/**
+ * Wraps one model call in a CLIENT span named per the OTel GenAI conventions.
+ * Records tokens, finish reason and — most importantly — whether the keyword
+ * fallback was used, which is otherwise invisible because the app keeps
+ * working. Prompts and completions are never recorded: they contain profile data.
+ */
+async function tracedCall<T>(
+  operation: AiOperation,
+  attributes: Record<string, number | string | boolean>,
+  run: () => Promise<AiResult<T>>,
+): Promise<T> {
+  return startSpan(
+    `chat ${MODEL}`,
+    {
+      'gen_ai.system': 'anthropic',
+      'gen_ai.provider.name': 'anthropic',
+      'gen_ai.operation.name': 'chat',
+      'gen_ai.request.model': MODEL,
+      'app.ai.operation': operation,
+      ...attributes,
+    },
+    async (span) => {
+      const result = await run();
+      const input = result.response?.usage?.input_tokens ?? 0;
+      const output = result.response?.usage?.output_tokens ?? 0;
+
+      setSpanAttributes(span, {
+        'app.ai.fallback': result.fallback,
+        ...(result.reason ? { 'app.ai.fallback_reason': result.reason } : {}),
+        ...(result.response?.model ? { 'gen_ai.response.model': result.response.model } : {}),
+        ...(result.response?.stop_reason
+          ? { 'gen_ai.response.finish_reasons': [result.response.stop_reason] }
+          : {}),
+        'gen_ai.usage.input_tokens': input,
+        'gen_ai.usage.output_tokens': output,
+      });
+      recordAiCall(operation, result.fallback, input, output);
+
+      if (result.fallback) {
+        log.warn('ai.fallback', {
+          'app.ai.operation': operation,
+          'app.ai.fallback_reason': result.reason ?? 'unknown',
+          ...(result.error ? errorAttrs(result.error) : {}),
+        });
+      }
+      return result.value;
+    },
+    SpanKind.CLIENT,
+  );
+}
 
 export const AI_ENABLED = process.env.AI_ENABLED !== 'false';
 
@@ -95,12 +170,16 @@ export async function tagTalks(talks: TaggableTalk[]): Promise<Record<string, st
     Object.fromEntries(talks.map((t) => [t.id, tagsFromKeywords(`${t.title} ${t.abstract}`)]));
 
   const anthropic = getClient();
-  if (!anthropic || talks.length === 0) return fallback();
+  if (!anthropic || talks.length === 0) {
+    recordAiCall('tag_talks', true);
+    return fallback();
+  }
 
   const catalogue = talks
     .map((t) => `<talk id="${t.id}">\n${t.title}\n${t.abstract}\n</talk>`)
     .join('\n\n');
 
+  return tracedCall('tag_talks', { 'app.ai.batch_size': talks.length }, async () => {
   try {
     const response = await anthropic.messages.parse({
       model: MODEL,
@@ -118,7 +197,14 @@ export async function tagTalks(talks: TaggableTalk[]): Promise<Record<string, st
       ],
     });
 
-    if (response.stop_reason === 'refusal' || !response.parsed_output) return fallback();
+    if (response.stop_reason === 'refusal' || !response.parsed_output) {
+      return {
+        value: fallback(),
+        fallback: true,
+        reason: response.stop_reason === 'refusal' ? 'refusal' : 'empty_output',
+        response,
+      };
+    }
 
     const result: Record<string, string[]> = {};
     for (const entry of response.parsed_output.talks) {
@@ -131,11 +217,11 @@ export async function tagTalks(talks: TaggableTalk[]): Promise<Record<string, st
         result[talk.id] = tagsFromKeywords(`${talk.title} ${talk.abstract}`);
       }
     }
-    return result;
+    return { value: result, fallback: false, response };
   } catch (err) {
-    console.warn(`! tagTalks fell back to keywords: ${(err as Error).message}`);
-    return fallback();
+    return { value: fallback(), fallback: true, reason: 'error', error: err };
   }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +246,8 @@ export interface EnrichedProfile {
   headline: string;
   summary: string;
   derivedTags: string[];
+  /** Whether Claude produced this or the keyword fallback did. */
+  source: 'claude' | 'fallback';
 }
 
 /**
@@ -185,11 +273,23 @@ export async function enrichProfile(input: ProfileInput): Promise<EnrichedProfil
     derivedTags: tagsFromKeywords(`${signalText} ${input.interests.join(' ')}`, 6).filter(
       (t) => !input.interests.includes(t),
     ),
+    source: 'fallback',
   });
 
   const anthropic = getClient();
-  if (!anthropic) return fallback();
+  if (!anthropic) {
+    recordAiCall('enrich_profile', true);
+    return fallback();
+  }
 
+  return tracedCall(
+    'enrich_profile',
+    {
+      'app.profile.has_resume': Boolean(input.resumeText),
+      'app.profile.has_github': Boolean(input.github),
+      'app.profile.has_linkedin': Boolean(input.linkedin),
+    },
+    async () => {
   try {
     const response = await anthropic.messages.parse({
       model: MODEL,
@@ -215,20 +315,33 @@ export async function enrichProfile(input: ProfileInput): Promise<EnrichedProfil
       ],
     });
 
-    if (response.stop_reason === 'refusal' || !response.parsed_output) return fallback();
+    if (response.stop_reason === 'refusal' || !response.parsed_output) {
+      return {
+        value: fallback(),
+        fallback: true,
+        reason: response.stop_reason === 'refusal' ? 'refusal' : 'empty_output',
+        response,
+      };
+    }
 
     const parsed = response.parsed_output;
     return {
-      headline: parsed.headline?.trim() || fallback().headline,
-      summary: parsed.summary?.trim() || fallback().summary,
-      derivedTags: sanitiseTags(parsed.derived_tags, 6).filter(
-        (t) => !input.interests.includes(t),
-      ),
+      value: {
+        headline: parsed.headline?.trim() || fallback().headline,
+        summary: parsed.summary?.trim() || fallback().summary,
+        derivedTags: sanitiseTags(parsed.derived_tags, 6).filter(
+          (t) => !input.interests.includes(t),
+        ),
+        source: 'claude',
+      },
+      fallback: false,
+      response,
     };
   } catch (err) {
-    console.warn(`! enrichProfile fell back: ${(err as Error).message}`);
-    return fallback();
+    return { value: fallback(), fallback: true, reason: 'error', error: err };
   }
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -260,8 +373,18 @@ export async function matchRationale(input: RationaleInput): Promise<string> {
   };
 
   const anthropic = getClient();
-  if (!anthropic) return fallback();
+  if (!anthropic) {
+    recordAiCall('match_rationale', true);
+    return fallback();
+  }
 
+  return tracedCall(
+    'match_rationale',
+    {
+      'app.match.shared_interest_count': input.sharedInterests.length,
+      'app.match.shared_talk_count': input.sharedTalkTitles.length,
+    },
+    async () => {
   try {
     const response = await anthropic.messages.create({
       model: MODEL,
@@ -284,14 +407,20 @@ export async function matchRationale(input: RationaleInput): Promise<string> {
       ],
     });
 
-    if (response.stop_reason === 'refusal') return fallback();
+    if (response.stop_reason === 'refusal') {
+      return { value: fallback(), fallback: true, reason: 'refusal', response };
+    }
     const text = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === 'text')
       .map((block) => block.text)
       .join(' ')
       .trim();
-    return text || fallback();
-  } catch {
-    return fallback();
+    return text
+      ? { value: text, fallback: false, response }
+      : { value: fallback(), fallback: true, reason: 'empty_output', response };
+  } catch (err) {
+    return { value: fallback(), fallback: true, reason: 'error', error: err };
   }
+    },
+  );
 }

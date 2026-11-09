@@ -19,9 +19,36 @@ import type {
   TrendingTalk,
   User,
 } from './types';
-import { startSpan } from './telemetry';
+import type { Attributes, Span } from '@opentelemetry/api';
+import { recordRecommendLatency, setSpanAttributes, startSpan } from './telemetry';
+import { log } from './log';
 
 type SearchRequest = Parameters<typeof es.search>[0];
+
+type RecommendFeature = 'talks' | 'people' | 'similar-attendance';
+
+/**
+ * Records the outcome of one recommendation request on its span and in the
+ * latency / hits metrics. An empty result is also logged: it means an attendee
+ * was given nothing to act on, which is the inclusion failure this product
+ * exists to prevent.
+ */
+function recordRecommendOutcome(
+  span: Span,
+  feature: RecommendFeature,
+  started: number,
+  count: number,
+  attributes: Attributes = {},
+): void {
+  setSpanAttributes(span, {
+    'app.feature': feature,
+    'app.recommend.result_count': count,
+    'app.recommend.empty': count === 0,
+    ...attributes,
+  });
+  recordRecommendLatency(feature, Date.now() - started, count);
+  if (count === 0) log.warn('recommend.empty', { 'app.feature': feature, ...attributes });
+}
 
 /** The client's generated types do not cover `retriever` / `semantic` yet. */
 function search<T>(body: Record<string, unknown>) {
@@ -163,7 +190,8 @@ export async function recommendTalks(
   const size = options.size ?? 60;
   const semantic = await semanticReady();
 
-  return startSpan('recommend.talks', { 'app.semantic': semantic }, async () => {
+  return startSpan('recommend.talks', { 'app.semantic': semantic }, async (span) => {
+    const started = Date.now();
     const interests = user.interests ?? [];
     const derived = user.derivedTags ?? [];
     const filter = [{ term: { eventId } }];
@@ -242,6 +270,12 @@ export async function recommendTalks(
       };
     });
 
+    recordRecommendOutcome(span, 'talks', started, ranked.length, {
+      'app.user.interest_count': interests.length,
+      'app.recommend.top_score': ranked[0]?.score ?? 0,
+      'app.recommend.tag_matches': ranked.filter((r) => r.signals.tags).length,
+      'app.recommend.semantic_only': ranked.filter((r) => r.signals.semantic).length,
+    });
     return ranked;
   });
 }
@@ -324,9 +358,14 @@ async function findSimilarUsers(
 }
 
 export async function findPeople(user: User, size = 12): Promise<RankedPerson[]> {
-  return startSpan('recommend.people', {}, async () => {
+  return startSpan('recommend.people', {}, async (span) => {
+    const started = Date.now();
     const candidates = await findSimilarUsers(user, size + 4, { requireProfile: true });
-    if (candidates.length === 0) return [];
+    setSpanAttributes(span, { 'app.people.candidate_count': candidates.length });
+    if (candidates.length === 0) {
+      recordRecommendOutcome(span, 'people', started, 0);
+      return [];
+    }
 
     const myTalkIds = await getMyTalkIds(user.id);
     const theirAttendance = await getAttendanceForUsers(candidates.map((c) => c.id));
@@ -357,7 +396,12 @@ export async function findPeople(user: User, size = 12): Promise<RankedPerson[]>
       return { user: candidate, score, sharedInterests, sharedTalks };
     });
 
-    return ranked.sort((a, b) => b.score - a.score).slice(0, size);
+    const result = ranked.sort((a, b) => b.score - a.score).slice(0, size);
+    recordRecommendOutcome(span, 'people', started, result.length, {
+      'app.recommend.top_score': result[0]?.score ?? 0,
+      'app.people.with_shared_talks': result.filter((r) => r.sharedTalks.length > 0).length,
+    });
+    return result;
   });
 }
 
@@ -390,9 +434,14 @@ export async function similarPeopleAttending(
   eventId: string,
   size = 6,
 ): Promise<SimilarAttendance[]> {
-  return startSpan('recommend.similar-attendance', {}, async () => {
+  return startSpan('recommend.similar-attendance', {}, async (span) => {
+    const started = Date.now();
     const peers = await findSimilarUsers(user, 20);
-    if (peers.length === 0) return [];
+    setSpanAttributes(span, { 'app.similar.peer_count': peers.length });
+    if (peers.length === 0) {
+      recordRecommendOutcome(span, 'similar-attendance', started, 0);
+      return [];
+    }
 
     const peerIds = peers.map((p) => p.id);
     const myTalkIds = await getMyTalkIds(user.id);
@@ -425,12 +474,17 @@ export async function similarPeopleAttending(
       )?.buckets ?? [];
 
     const interesting = buckets.filter((b) => !myTalkIds.has(b.key)).slice(0, size);
-    if (interesting.length === 0) return [];
+    if (interesting.length === 0) {
+      recordRecommendOutcome(span, 'similar-attendance', started, 0, {
+        'app.similar.bucket_count': buckets.length,
+      });
+      return [];
+    }
 
     const talkMap = await getTalksByIds(interesting.map((b) => b.key));
     const peerMap = new Map(peers.map((p) => [p.id, p as User]));
 
-    return interesting
+    const result = interesting
       .map((bucket) => {
         const talk = talkMap.get(bucket.key);
         if (!talk) return null;
@@ -440,6 +494,11 @@ export async function similarPeopleAttending(
         return { talk, peerCount: bucket.doc_count, peers: peerUsers };
       })
       .filter((row): row is SimilarAttendance => row !== null);
+
+    recordRecommendOutcome(span, 'similar-attendance', started, result.length, {
+      'app.similar.bucket_count': buckets.length,
+    });
+    return result;
   });
 }
 

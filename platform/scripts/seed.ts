@@ -116,7 +116,17 @@ const ROLES = [
   'Backend Engineer', 'Site Reliability Engineer', 'Product Engineer', 'Tech Lead',
 ];
 
-const CROWD_SIZE = 80;
+/**
+ * Background attendees. 80 keeps the demo snappy; `--crowd 1500` seeds a
+ * realistic-size floor so ranking and aggregation latency in Dash0 reflects a
+ * real conference rather than a toy one.
+ */
+function crowdSizeArg(): number {
+  const i = process.argv.indexOf('--crowd');
+  const n = i >= 0 ? Number.parseInt(process.argv[i + 1] ?? '', 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 80;
+}
+const CROWD_SIZE = crowdSizeArg();
 
 interface SeedUser extends Omit<User, 'id'> {
   id: string;

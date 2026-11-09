@@ -10,6 +10,8 @@ const nextConfig: NextConfig = {
     "@elastic/elasticsearch",
     "@opentelemetry/sdk-node",
     "@opentelemetry/auto-instrumentations-node",
+    "@opentelemetry/sdk-logs",
+    "@opentelemetry/exporter-logs-otlp-http",
   ],
 };
 
