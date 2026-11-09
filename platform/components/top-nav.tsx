@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/session';
 import { Avatar } from './avatar';
+import { VoiceNavigation } from './voice-navigation';
 
 const LINKS = [
   { href: '/agenda', label: 'Agenda' },
@@ -31,7 +32,8 @@ export async function TopNav() {
           ))}
         </div>
 
-        <div className="ml-auto shrink-0">
+        <div className="ml-auto flex items-center gap-3 shrink-0">
+          <VoiceNavigation />
           {user ? (
             <Link
               href="/"
