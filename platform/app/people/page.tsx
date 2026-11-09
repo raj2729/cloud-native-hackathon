@@ -46,6 +46,10 @@ export default async function PeoplePage() {
           Matched on your five interests, the text of your profile, and the talks you have both
           saved. Ranked for <span className="text-foreground">{user.name}</span>.
         </p>
+        <p className="text-xs text-muted-dim mt-1.5">
+          The second question nobody can answer at a conference: of the hundred people in the
+          room, which three should you actually talk to.
+        </p>
       </header>
 
       {people.length === 0 ? (

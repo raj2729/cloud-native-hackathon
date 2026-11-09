@@ -5,7 +5,7 @@
  */
 import { metrics, trace, SpanStatusCode, type Attributes } from '@opentelemetry/api';
 
-const TRACER_NAME = 'conference-platform';
+const TRACER_NAME = 'converge';
 
 export async function startSpan<T>(
   name: string,

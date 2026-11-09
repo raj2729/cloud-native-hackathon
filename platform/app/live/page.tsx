@@ -53,6 +53,9 @@ export default async function LivePage() {
           <p className="text-sm text-muted mt-1.5">
             {totalInRooms} people checked in across {rooms.length} rooms · refreshed {updatedAt}
           </p>
+          <p className="text-xs text-muted-dim mt-1 max-w-xl">
+            What is attracting attention right now — not in the post-event report.
+          </p>
         </div>
         {nowPlaying.length > 0 && (
           <p className="text-xs text-muted-dim max-w-xs">

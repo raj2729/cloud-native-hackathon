@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Confluence — conference matchmaking",
+  title: "Converge — your conference, your interests, your people",
   description:
-    "Find the talks worth your time and the people worth meeting, at the conference you are already at.",
+    "An AI-powered conference companion that connects people to the right talks, the right attendees, and the right opportunities in real time.",
 };
 
 // Typed explicitly rather than with Next's generated `LayoutProps`, which only

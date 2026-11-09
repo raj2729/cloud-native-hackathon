@@ -1,10 +1,11 @@
-import Link from 'next/link';
 import { listUsers, getCurrentUserId } from '@/lib/session';
 import { listEvents } from '@/lib/search';
 import { switchUser, signOut } from './actions';
 import { Avatar } from '@/components/avatar';
 import { label } from '@/lib/taxonomy';
 import { SetupNotice } from '@/components/setup-notice';
+import { Hero } from '@/components/hero';
+import { ProblemGrid } from '@/components/problem-grid';
 import type { User } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -45,25 +46,8 @@ export default async function HomePage() {
   const groups = groupByCluster(curated);
 
   return (
-    <div className="pt-12">
-      <section className="max-w-2xl">
-        <h1 className="text-4xl font-semibold tracking-tight leading-tight">
-          The two hardest questions at a conference
-        </h1>
-        <p className="mt-4 text-muted leading-relaxed">
-          Which of the twenty-four talks is worth your next hour, and which of the hundred
-          people in the room is worth your next conversation. Confluence answers both from
-          five interests and a link to your work.
-        </p>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Link href="/onboarding" className="btn btn-primary">
-            Create your profile
-          </Link>
-          <Link href="/live" className="btn">
-            See the live floor
-          </Link>
-        </div>
-      </section>
+    <div>
+      <Hero />
 
       {esError ? (
         <SetupNotice message={esError} />
@@ -142,6 +126,8 @@ export default async function HomePage() {
           </div>
         </section>
       )}
+
+      <ProblemGrid />
     </div>
   );
 }

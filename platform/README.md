@@ -1,10 +1,23 @@
-# Confluence
+# Converge
 
-A conference platform that answers the two hardest questions at any event: **which talk is worth your next hour, and which person is worth your next conversation.**
+**Your conference. Your interests. Your people.**
 
-Organizers publish a conference and its talks. Attendees give five interests and a link to their work — any one of LinkedIn, GitHub, or a pasted resume. From that, the platform ranks every talk against you, finds the people you should meet, shows what people like you are attending, and runs a live view of the floor.
+An AI-powered conference companion that connects people to the right talks, the right attendees, and the right opportunities in real time.
 
-Elasticsearch is the only datastore: primary storage, hybrid search (BM25 + e5 vectors fused with RRF), and the real-time aggregation engine behind the live dashboard. There is no second database.
+> Instead of making attendees search for interesting things at a conference, make the conference discover what is interesting to each attendee.
+
+That inversion is the whole product. Organizers publish a conference and its talks. Attendees give five interests and a link to their work — any one of LinkedIn, GitHub, or a pasted resume. Everything after that is discovery the attendee never has to ask for.
+
+## The four problems
+
+| # | Problem | Answer |
+|---|---|---|
+| 01 | Attendees don't know which talks are relevant to them | `/agenda` — every talk scored against your interests and your own profile text, with the matched interests shown |
+| 02 | Attendees don't know which other people they should meet | `/people` — attendees ranked by shared interests, profile similarity and shared sessions, with a reason and a LinkedIn link |
+| 03 | Attendees don't know what people with similar interests are attending | `/agenda` — what the 20 closest profiles are actually going to, minus what you already saved |
+| 04 | Organizers don't know what's attracting attention until the event is over | `/live` — room occupancy and velocity-ranked trending, updating every few seconds |
+
+Elasticsearch is the only datastore: primary storage, hybrid search (BM25 + e5 vectors fused with RRF), and the real-time aggregation engine behind the live view. There is no second database.
 
 ## Run it
 
@@ -66,9 +79,9 @@ Every Claude call in `lib/ai.ts` has a deterministic keyword fallback and cannot
 
 `npm run es:seed:ai` also runs Claude profile enrichment across the 20 seeded personas (20 API calls, slower).
 
-## The four features
+## How each one works
 
-| Feature | Where | How it works |
+| Feature | Where | Mechanics |
 |---|---|---|
 | Talks tagged against your interests | `/agenda` | RRF fusion of a tag/BM25 retriever and a semantic retriever over `talks.semantic`. The displayed score blends retrieval rank with how much of your stated interest the talk covers, so a talk no tag matched can still score ~40 on similarity alone. |
 | People tagged against your interests | `/people` | Same RRF shape over `users.semantic`, re-ranked by shared interests and shared sessions. Restricted to people who wrote about their own work, because a match you cannot explain is not worth making. LinkedIn connect on every card. |

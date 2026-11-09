@@ -16,7 +16,7 @@ export async function TopNav() {
     <header className="relative z-20 border-b border-line">
       <nav className="w-full max-w-6xl mx-auto px-5 h-14 flex items-center gap-6">
         <Link href="/" className="font-semibold tracking-tight shrink-0">
-          Confluence
+          Converge
         </Link>
 
         <div className="flex items-center gap-1 text-sm text-muted overflow-x-auto">

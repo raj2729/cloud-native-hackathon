@@ -35,7 +35,7 @@ if (!endpoint || !token) {
 
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME ?? 'confluence',
+      [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME ?? 'converge',
       [ATTR_SERVICE_VERSION]: '0.1.0',
     }),
     traceExporter: new OTLPTraceExporter({

@@ -77,6 +77,9 @@ export default async function AgendaPage({
             Ranked for <span className="text-foreground">{user.name}</span> ·{' '}
             {user.interests.map(label).join(', ')}
           </p>
+          <p className="text-xs text-muted-dim mt-1">
+            You are not searching this agenda — it reordered itself around you.
+          </p>
         </div>
 
         <div className="flex gap-1 p-1 card">
