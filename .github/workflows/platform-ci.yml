@@ -1,0 +1,40 @@
+name: Platform CI
+
+# Scoped to platform/ so it does not run on changes to frontend/.
+on:
+  push:
+    branches: [main]
+    paths: ['platform/**', '.github/workflows/platform-ci.yml']
+  pull_request:
+    paths: ['platform/**', '.github/workflows/platform-ci.yml']
+
+defaults:
+  run:
+    working-directory: platform
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: platform/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          # The build must not require a running Elasticsearch — every page is
+          # rendered per request.
+          ELASTICSEARCH_URL: http://localhost:9200
