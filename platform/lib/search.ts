@@ -20,7 +20,7 @@ import type {
   User,
 } from './types';
 import type { Attributes, Span } from '@opentelemetry/api';
-import { recordRecommendLatency, setSpanAttributes, startSpan } from './telemetry';
+import { injectLatency, recordRecommendLatency, setSpanAttributes, startSpan } from './telemetry';
 import { log } from './log';
 
 type SearchRequest = Parameters<typeof es.search>[0];
@@ -192,6 +192,7 @@ export async function recommendTalks(
 
   return startSpan('recommend.talks', { 'app.semantic': semantic }, async (span) => {
     const started = Date.now();
+    await injectLatency(span);
     const interests = user.interests ?? [];
     const derived = user.derivedTags ?? [];
     const filter = [{ term: { eventId } }];

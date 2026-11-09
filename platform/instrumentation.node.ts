@@ -21,6 +21,7 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
 } from '@opentelemetry/semantic-conventions';
+import { appVersion } from './lib/version';
 
 const endpoint = process.env.DASH0_ENDPOINT;
 const token = process.env.DASH0_AUTH_TOKEN;
@@ -40,7 +41,7 @@ if (!endpoint || !token) {
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME ?? 'converge',
-      [ATTR_SERVICE_VERSION]: '0.1.0',
+      [ATTR_SERVICE_VERSION]: appVersion(),
       // Lets Dash0 filters and dashboards separate this deployment from any other.
       'deployment.environment.name': process.env.DEPLOYMENT_ENV ?? 'hackathon',
       'service.namespace': 'converge',

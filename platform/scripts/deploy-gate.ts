@@ -52,6 +52,13 @@ const config = {
       Date.now() - bakeMinutes * 60_000,
   ),
   bakeMinutes,
+  /**
+   * End of the baseline window. Defaults to the window start; CI sets it to the
+   * moment the deploy was triggered so rollout time is in neither window.
+   */
+  baselineEnd: new Date(
+    arg('baseline-end') || process.env.BASELINE_END || arg('window-start') || process.env.WINDOW_START || 0,
+  ),
   /** Length of the baseline window before the comparison boundary. */
   baselineMinutes: num(process.env.BASELINE_MINUTES, Math.max(bakeMinutes, 15)),
   /** Relative increase in p95 that counts as a regression. */
@@ -75,6 +82,12 @@ const config = {
   comparisonId: process.env.COMPARISON_ID ?? `local-${Date.now()}`,
   environment: process.env.DEPLOYMENT_ENV ?? 'hackathon',
 };
+
+/** End of the baseline window: BASELINE_END when valid, otherwise the window start. */
+function baselineEnd(): Date {
+  const end = config.baselineEnd;
+  return end.getTime() > 0 && end <= config.windowStart ? end : config.windowStart;
+}
 
 // ---------------------------------------------------------------------------
 // Dash0 queries
@@ -234,6 +247,7 @@ async function triggerAgent0(rows: Comparison[]): Promise<boolean> {
     repository: config.repository || 'unknown',
     compareUrl: compareUrl() || 'unavailable',
     ciRunUrl: runUrl() || 'unavailable',
+    baselineEnd: baselineEnd().toISOString(),
     windowStart: config.windowStart.toISOString(),
     bakeMinutes: String(config.bakeMinutes),
     baselineMinutes: String(config.baselineMinutes),
@@ -330,14 +344,14 @@ async function main(): Promise<void> {
 
   console.log(
     `Latency gate for ${config.service}: baseline ${config.baselineMinutes}m before ` +
-      `${config.windowStart.toISOString()} vs ${config.bakeMinutes}m after. ` +
+      `${baselineEnd().toISOString()} vs ${config.bakeMinutes}m after ${config.windowStart.toISOString()}. ` +
       `Regression = +${config.thresholdPct}% and +${config.minDeltaMs}ms on p95, n ≥ ${config.minSamples}.`,
   );
 
   let rows: Comparison[];
   try {
     const [before, after] = await Promise.all([
-      windowStats(config.windowStart, config.baselineMinutes),
+      windowStats(baselineEnd(), config.baselineMinutes),
       windowStats(afterAt, config.bakeMinutes),
     ]);
     rows = compare(before, after);
@@ -373,6 +387,7 @@ async function main(): Promise<void> {
     console.error(`Agent0 trigger failed: ${(err as Error).message}`);
     return false;
   });
+  writeOutput('agent0', String(agent0Started));
   await notifySlack(rows, agent0Started).catch((err: unknown) => {
     console.error(`Slack notification failed: ${(err as Error).message}`);
   });

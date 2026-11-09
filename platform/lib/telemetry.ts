@@ -56,6 +56,18 @@ export async function startSpan<T>(
 }
 
 /**
+ * Test-only fault injection for the CI latency gate: when LATENCY_INJECT_MS is
+ * set, sleeps that long inside the span and tags it, so a deliberate
+ * regression is easy to tell apart from a real one in Dash0. Unset means no-op.
+ */
+export async function injectLatency(span: Span): Promise<void> {
+  const ms = Number.parseInt(process.env.LATENCY_INJECT_MS ?? '', 10);
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  span.setAttribute('app.fault.injected_latency_ms', ms);
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Marks the active span as failed without throwing — for actions that return
  * `{ error }` to the form instead of raising.
  */
