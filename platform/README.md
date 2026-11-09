@@ -132,6 +132,39 @@ Radar's desktop app runs locally and reads the cluster through your kubeconfig. 
 
 The Elasticsearch settings below are for local development only: security is disabled, with no public Service or Ingress. Give Docker Desktop at least 4 GB of memory (6 GB recommended when enabling the e5 model).
 
+For a hosted Elastic Cloud cluster instead of the in-cluster Elasticsearch, set `ELASTICSEARCH_URL` to its HTTPS endpoint and `ELASTICSEARCH_API_KEY` to an API key. No local software installation is needed. The Next.js app can load these values from `platform/.env.local` (which is gitignored). For setup/seed scripts, export the values in the shell or prefix the commands with them. Use a least-privilege key for the app, and a separate appropriately privileged key for index/model setup if required.
+
+For local development, create `platform/.env.local` with:
+
+```dotenv
+ELASTICSEARCH_URL=https://my-vectordb-project-d22796.es.us-east4.gcp.elastic.cloud:443
+ELASTICSEARCH_API_KEY=replace-with-your-key
+```
+
+Replace the placeholder locally; never commit this file or paste the key into chat.
+
+For the Kubernetes app, create a Secret without putting the key in YAML or source control. Enter the key at the hidden prompt:
+
+```bash
+printf 'Elastic Cloud API key: '
+read -s ELASTICSEARCH_API_KEY
+printf '\n'
+kubectl -n hackathon create secret generic elasticsearch-credentials \
+  --from-literal=api-key="$ELASTICSEARCH_API_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset ELASTICSEARCH_API_KEY
+```
+
+The `converge` ConfigMap in `k8s/app.yaml` is set to the provided Elastic Cloud HTTPS endpoint. Apply it and restart the app after the Secret is created:
+
+```bash
+kubectl apply -f k8s/app.yaml
+kubectl -n hackathon rollout restart deployment/converge
+kubectl -n hackathon rollout status deployment/converge --timeout=5m
+```
+
+Do not use the in-cluster Elasticsearch endpoint and a Cloud API key together. If using the local in-cluster Elasticsearch shown in this guide, leave `ELASTICSEARCH_API_KEY` unset.
+
 From the repository root, install the app dependencies and confirm the intended cluster:
 
 ```bash
