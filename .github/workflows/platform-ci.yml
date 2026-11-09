@@ -2,30 +2,28 @@ name: Platform CI
 
 # Scoped to platform/ so it does not run on changes to frontend/.
 #
-# On pushes to main (or a manual run), a successful check is followed by a
-# latency comparison in one job:
+# `check` typechecks, lints and builds on every push and PR.
 #
-#   1. start synthetic traffic against APP_URL (when configured) and let it
-#      build a baseline for WARMUP_MINUTES;
-#   2. trigger the deploy (DEPLOY_HOOK_URL) and wait until APP_URL/api/version
-#      reports this commit, so the comparison window measures the new build;
-#   3. keep traffic flowing for BAKE_MINUTES, then compare p95 per operation.
+# `latency` catches PRs that make the app slower — without a hosted app. On the
+# runner it:
 #
-# On regression, the gate triggers Agent0 RCA and fails the job.
+#   1. starts a fresh Elasticsearch and seeds it with the deterministic demo data;
+#   2. builds the PR's base commit and the PR itself;
+#   3. runs each build in turn under the same synthetic traffic for
+#      WINDOW_MINUTES, exporting spans to Dash0 as service `confluence-ci`
+#      (service.version = the commit), so base and head are directly comparable;
+#   4. compares p95 per operation (scripts/deploy-gate.ts). On regression it
+#      calls the Agent0 automation webhook — Agent0 runs the RCA against the
+#      traces and the diff and posts to Slack — and fails the PR check.
 #
 # Configuration:
-#   vars:    DASH0_OTLP_URL, DASH0_API_URL, DASH0_DATASET (optional),
-#            AGENT0_WEBHOOK_URL, BAKE_MINUTES (optional),
-#            DEPLOY_HOOK_URL (optional; skip to check latency without deploying),
-#            APP_URL (optional; public URL of the deployed app, enables the
-#                     deploy-live wait and CI-generated traffic),
-#            WARMUP_MINUTES (optional), DEPLOY_WAIT_MINUTES (optional)
-#   secrets: DASH0_AUTH_TOKEN, AGENT0_WEBHOOK_SECRET, SLACK_WEBHOOK_URL (optional),
-#            ELASTICSEARCH_URL (optional; the deployed app's ES, read by the
-#                               traffic generator to pick real users and talks)
+#   vars:    DASH0_OTLP_URL (ingest), DASH0_API_URL (query), DASH0_DATASET (optional),
+#            AGENT0_WEBHOOK_URL, WINDOW_MINUTES (optional, default 5)
+#   secrets: DASH0_AUTH_TOKEN, AGENT0_WEBHOOK_SECRET,
+#            SLACK_WEBHOOK_URL (optional; an immediate heads-up before Agent0's RCA)
 #
-# Without APP_URL + ELASTICSEARCH_URL, the gate relies on traffic the app
-# already gets in both windows.
+# PRs from forks get no secrets, so the latency job runs only for branches of
+# this repository.
 on:
   push:
     branches: [main]
@@ -34,9 +32,12 @@ on:
     paths: ['platform/**', '.github/workflows/platform-ci.yml']
   workflow_dispatch:
     inputs:
-      bake_minutes:
-        description: Minutes in the comparison window after the new build is live
-        default: '10'
+      base_ref:
+        description: Branch or commit to compare the selected ref against
+        default: main
+      window_minutes:
+        description: Minutes of traffic per build
+        default: '5'
       fail_on_regression:
         description: Fail the run when latency regresses
         type: boolean
@@ -47,9 +48,9 @@ defaults:
     working-directory: platform
 
 env:
-  SERVICE_NAME: confluence
+  SERVICE_NAME: confluence-ci
   SERVICE_NAMESPACE: converge
-  DEPLOYMENT_ENV: hackathon
+  DEPLOYMENT_ENV: ci
 
 jobs:
   check:
@@ -80,17 +81,46 @@ jobs:
 
   latency:
     needs: check
-    if: github.event_name != 'pull_request'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    # One run at a time, so comparison windows do not overlap.
-    concurrency: latency-${{ github.ref }}
+    timeout-minutes: 45
+    # Runs share one Dash0 service name; one at a time keeps windows apart.
+    concurrency:
+      group: platform-latency
+      cancel-in-progress: false
+    services:
+      elasticsearch:
+        image: public.ecr.aws/elastic/elasticsearch:9.5.1
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: 'false'
+          # No ML: semantic ranking stays off, so the e5 model finishing its
+          # deployment mid-run cannot shift latency between the two windows.
+          xpack.ml.enabled: 'false'
+          ES_JAVA_OPTS: -Xms1g -Xmx1g
+          cluster.routing.allocation.disk.threshold_enabled: 'false'
+        ports: ['9200:9200']
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 30
     env:
-      APP_URL: ${{ vars.APP_URL }}
-      BAKE_MINUTES: ${{ inputs.bake_minutes || vars.BAKE_MINUTES || '10' }}
-      WARMUP_MINUTES: ${{ vars.WARMUP_MINUTES || '10' }}
-      DEPLOY_WAIT_MINUTES: ${{ vars.DEPLOY_WAIT_MINUTES || '15' }}
+      ELASTICSEARCH_URL: http://localhost:9200
+      AI_ENABLED: 'false'
+      NEXT_TELEMETRY_DISABLED: '1'
+      WINDOW_MINUTES: ${{ inputs.window_minutes || vars.WINDOW_MINUTES || '5' }}
+      # The app's OTel SDK (instrumentation.node.ts) ships spans to Dash0.
+      DASH0_ENDPOINT: ${{ vars.DASH0_OTLP_URL }}
+      DASH0_AUTH_TOKEN: ${{ secrets.DASH0_AUTH_TOKEN }}
+      DASH0_DATASET: ${{ vars.DASH0_DATASET || 'default' }}
+      OTEL_SERVICE_NAME: confluence-ci
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -98,155 +128,86 @@ jobs:
           cache: npm
           cache-dependency-path: platform/package-lock.json
 
-      - run: npm ci
-
-      # Runs in the background for the rest of the job, so both the baseline
-      # and the comparison window have samples.
-      - name: Start synthetic traffic
-        id: traffic
-        env:
-          ELASTICSEARCH_URL: ${{ secrets.ELASTICSEARCH_URL }}
+      - name: Check configuration
         run: |
-          if [ -z "$APP_URL" ] || [ -z "$ELASTICSEARCH_URL" ]; then
-            echo "APP_URL or ELASTICSEARCH_URL not set — relying on existing traffic."
-            echo "started=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          missing=""
+          [ -n "$DASH0_ENDPOINT" ]   || missing="$missing DASH0_OTLP_URL"
+          [ -n "$DASH0_AUTH_TOKEN" ] || missing="$missing DASH0_AUTH_TOKEN"
+          [ -n "${{ vars.DASH0_API_URL }}" ] || missing="$missing DASH0_API_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::Latency check needs:$missing"
+            exit 1
           fi
-          # Single process (no tsx wrapper), so SIGINT reaches the generator.
-          nohup node --import tsx scripts/traffic.ts --base "$APP_URL" --workers 4 \
-            > "$RUNNER_TEMP/traffic.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/traffic.pid"
-          sleep 15
-          if ! kill -0 "$(cat "$RUNNER_TEMP/traffic.pid")" 2>/dev/null; then
-            echo "::warning::Traffic generator exited early; relying on existing traffic."
-            cat "$RUNNER_TEMP/traffic.log"
-            echo "started=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "started=true" >> "$GITHUB_OUTPUT"
+          [ -n "${{ vars.AGENT0_WEBHOOK_URL }}" ] || echo "::warning::AGENT0_WEBHOOK_URL not set — regressions will not get an RCA."
 
-      - name: Build baseline (${{ env.WARMUP_MINUTES }} min)
-        if: steps.traffic.outputs.started == 'true' && vars.DASH0_API_URL != ''
-        run: sleep $(( WARMUP_MINUTES * 60 ))
-
-      - name: Deploy (when configured)
-        id: deploy
+      - name: Resolve base commit
+        id: base
         env:
-          DEPLOY_HOOK_URL: ${{ vars.DEPLOY_HOOK_URL }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ inputs.base_ref || 'main' }}
         run: |
-          echo "baseline_end=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          if [ -n "$DEPLOY_HOOK_URL" ]; then
-            curl -fsS -X POST "$DEPLOY_HOOK_URL"
-            echo "Deploy hook called."
+          if [ -n "$PR_BASE_SHA" ]; then
+            sha=$PR_BASE_SHA
           else
-            echo "No DEPLOY_HOOK_URL set — continuing with a latency check only."
+            sha=$(git rev-parse "origin/$BASE_REF" 2>/dev/null || git rev-parse "$BASE_REF")
           fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Comparing base $sha against head $HEAD_SHA"
 
-      # Deploy hooks return as soon as the build is queued. Start the comparison
-      # window only once the new build is actually serving traffic.
-      - name: Wait for ${{ github.sha }} to be live
-        id: live
-        if: vars.DEPLOY_HOOK_URL != ''
+      - name: Build head
+        run: npm ci && npm run build
+
+      - name: Build base
+        id: build_base
         run: |
-          if [ -z "$APP_URL" ]; then
-            echo "::warning::APP_URL not set — cannot confirm the deploy is live; the window starts at the deploy trigger."
-            exit 0
-          fi
-          deadline=$(( $(date +%s) + DEPLOY_WAIT_MINUTES * 60 ))
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            version=$(curl -fsS --max-time 10 "$APP_URL/api/version" 2>/dev/null \
-              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).version)}catch{}})')
-            if [ "$version" = "$GITHUB_SHA" ]; then
-              echo "$GITHUB_SHA is live."
-              exit 0
-            fi
-            echo "Serving ${version:-unreachable}; waiting for $GITHUB_SHA…"
-            sleep 20
-          done
-          echo "::error::$GITHUB_SHA was not live at $APP_URL after $DEPLOY_WAIT_MINUTES minutes. Check that the host sets APP_VERSION (or its git SHA variable)."
-          exit 1
+          git worktree add "$RUNNER_TEMP/base" "${{ steps.base.outputs.sha }}"
+          cd "$RUNNER_TEMP/base/platform"
+          npm ci && npm run build
 
-      - name: Record latency window start
-        id: mark
-        run: echo "window_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Set up and seed Elasticsearch
+        run: npm run es:setup && npm run es:seed
 
-      - name: Send Dash0 deployment event
-        if: always() && vars.DEPLOY_HOOK_URL != '' && vars.DASH0_OTLP_URL != '' && steps.deploy.outcome != 'skipped'
-        uses: dash0hq/dash0-cli/.github/actions/send-log-event@v1.20.0
-        with:
-          otlp-url: ${{ vars.DASH0_OTLP_URL }}
-          auth-token: ${{ secrets.DASH0_AUTH_TOKEN }}
-          dataset: ${{ vars.DASH0_DATASET || 'default' }}
-          event-name: dash0.deployment
-          body: Deployed ${{ env.SERVICE_NAME }} ${{ github.sha }} (${{ steps.live.outcome == 'success' && 'live' || steps.deploy.outcome }})
-          severity-number: ${{ steps.deploy.outcome == 'success' && steps.live.outcome == 'success' && '9' || '17' }}
-          service-name: ${{ env.SERVICE_NAME }}
-          service-namespace: ${{ env.SERVICE_NAMESPACE }}
-          service-version: ${{ github.sha }}
-          deployment-environment-name: ${{ env.DEPLOYMENT_ENV }}
-          deployment-name: ${{ env.SERVICE_NAME }}
-          deployment-id: ${{ github.run_id }}-${{ github.run_attempt }}
-          deployment-status: ${{ steps.deploy.outcome == 'success' && steps.live.outcome == 'success' && 'succeeded' || 'failed' }}
-          vcs-repository-url: ${{ github.server_url }}/${{ github.repository }}
-          vcs-ref-head-revision: ${{ github.sha }}
-          vcs-ref-head-name: ${{ github.ref_name }}
-          other-log-attributes: |
-            cicd.pipeline.run.url.full=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            vcs.ref.base.revision=${{ github.event.before }}
+      - name: Measure base (${{ env.WINDOW_MINUTES }} min)
+        id: base_window
+        run: scripts/ci-latency-window.sh base "$RUNNER_TEMP/base/platform" "${{ steps.base.outputs.sha }}" "$WINDOW_MINUTES"
 
-      - name: Mark Dash0 latency window
-        if: vars.DEPLOY_HOOK_URL == '' && vars.DASH0_OTLP_URL != ''
-        uses: dash0hq/dash0-cli/.github/actions/send-log-event@v1.20.0
-        with:
-          otlp-url: ${{ vars.DASH0_OTLP_URL }}
-          auth-token: ${{ secrets.DASH0_AUTH_TOKEN }}
-          dataset: ${{ vars.DASH0_DATASET || 'default' }}
-          event-name: converge.latency_window.start
-          body: Latency comparison window started for ${{ env.SERVICE_NAME }} at ${{ steps.mark.outputs.window_start }}
-          severity-number: '9'
-          service-name: ${{ env.SERVICE_NAME }}
-          service-namespace: ${{ env.SERVICE_NAMESPACE }}
-          service-version: ${{ github.sha }}
-          deployment-environment-name: ${{ env.DEPLOYMENT_ENV }}
-          other-log-attributes: |
-            app.gate.window.start=${{ steps.mark.outputs.window_start }}
-            cicd.pipeline.run.url.full=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Measure head (${{ env.WINDOW_MINUTES }} min)
+        id: head_window
+        run: scripts/ci-latency-window.sh head "$GITHUB_WORKSPACE/platform" "$HEAD_SHA" "$WINDOW_MINUTES"
 
-      - name: Collect comparison window (${{ env.BAKE_MINUTES }} min)
-        if: vars.DASH0_API_URL != ''
-        run: sleep $(( BAKE_MINUTES * 60 ))
+      # Spans → span metrics in Dash0 takes a moment; let the head window land.
+      - name: Wait for Dash0 ingestion
+        run: sleep 60
 
-      - name: Compare p95 latency across the CI window
+      - name: Compare p95 latency (base vs head)
         id: gate
-        if: vars.DASH0_API_URL != ''
         env:
           DASH0_API_URL: ${{ vars.DASH0_API_URL }}
-          DASH0_AUTH_TOKEN: ${{ secrets.DASH0_AUTH_TOKEN }}
-          DASH0_DATASET: ${{ vars.DASH0_DATASET || 'default' }}
           GATE_SERVICE_NAME: ${{ env.SERVICE_NAME }}
-          BASELINE_END: ${{ steps.deploy.outputs.baseline_end }}
-          # With CI-generated traffic, the baseline is exactly the warm-up.
-          BASELINE_MINUTES: ${{ steps.traffic.outputs.started == 'true' && env.WARMUP_MINUTES || '' }}
-          WINDOW_START: ${{ steps.mark.outputs.window_start }}
+          BASELINE_END: ${{ steps.base_window.outputs.base_end }}
+          BASELINE_MINUTES: ${{ env.WINDOW_MINUTES }}
+          WINDOW_START: ${{ steps.head_window.outputs.head_start }}
+          BAKE_MINUTES: ${{ env.WINDOW_MINUTES }}
+          COMMIT_SHA: ${{ env.HEAD_SHA }}
+          PREVIOUS_SHA: ${{ steps.base.outputs.sha }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
           COMPARISON_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          PREVIOUS_SHA: ${{ github.event.before }}
           FAIL_ON_REGRESSION: ${{ github.event_name == 'workflow_dispatch' && inputs.fail_on_regression == false && 'false' || 'true' }}
           AGENT0_WEBHOOK_URL: ${{ vars.AGENT0_WEBHOOK_URL }}
           AGENT0_WEBHOOK_SECRET: ${{ secrets.AGENT0_WEBHOOK_SECRET }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: npm run deploy:gate
 
-      - name: Stop synthetic traffic
-        if: always() && steps.traffic.outputs.started == 'true'
+      - name: Server logs
+        if: failure()
         run: |
-          kill -INT "$(cat "$RUNNER_TEMP/traffic.pid")" 2>/dev/null || true
-          sleep 5
-          kill "$(cat "$RUNNER_TEMP/traffic.pid")" 2>/dev/null || true
-          tail -c 2000 "$RUNNER_TEMP/traffic.log" | tr '\r' '\n' | tail -5
+          for f in "$RUNNER_TEMP"/server-*.log; do
+            [ -f "$f" ] && { echo "== $f"; tail -40 "$f"; }
+          done
 
       # The gate's verdict also lands on the Dash0 timeline.
       - name: Send latency gate result to Dash0
-        if: always() && vars.DASH0_OTLP_URL != '' && steps.gate.outcome != 'skipped'
+        if: always() && steps.gate.outcome != 'skipped'
         uses: dash0hq/dash0-cli/.github/actions/send-log-event@v1.20.0
         with:
           otlp-url: ${{ vars.DASH0_OTLP_URL }}
@@ -254,14 +215,17 @@ jobs:
           dataset: ${{ vars.DASH0_DATASET || 'default' }}
           event-name: converge.latency_gate
           body: >-
-            Latency gate for ${{ github.sha }}:
+            Latency gate for ${{ env.HEAD_SHA }} vs ${{ steps.base.outputs.sha }}:
             ${{ steps.gate.outputs.regressed == 'true' && 'regression detected' || steps.gate.outputs.regressed == 'false' && 'no regression' || 'inconclusive' }}${{ steps.gate.outputs.agent0 == 'true' && ', Agent0 RCA triggered' || '' }}
           severity-number: ${{ steps.gate.outputs.regressed == 'true' && '13' || '9' }}
           service-name: ${{ env.SERVICE_NAME }}
           service-namespace: ${{ env.SERVICE_NAMESPACE }}
-          service-version: ${{ github.sha }}
+          service-version: ${{ env.HEAD_SHA }}
           deployment-environment-name: ${{ env.DEPLOYMENT_ENV }}
+          vcs-repository-url: ${{ github.server_url }}/${{ github.repository }}
+          vcs-ref-head-revision: ${{ env.HEAD_SHA }}
           other-log-attributes: |
             app.gate.regressed=${{ steps.gate.outputs.regressed || 'unknown' }}
-            app.gate.bake_minutes=${{ env.BAKE_MINUTES }}
+            app.gate.window_minutes=${{ env.WINDOW_MINUTES }}
+            vcs.ref.base.revision=${{ steps.base.outputs.sha }}
             cicd.pipeline.run.url.full=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

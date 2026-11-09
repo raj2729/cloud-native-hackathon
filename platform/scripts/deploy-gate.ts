@@ -1,7 +1,8 @@
 /**
  * CI latency gate.
  *
- * Compares p95 latency per operation before and after the CI window boundary,
+ * Compares p95 latency per operation between two windows — in CI, the PR's base
+ * build vs. its head build, each driven by the same synthetic traffic —
  * using Dash0's Prometheus-compatible query API over the span-derived
  * `dash0.spans.duration` metric. When an operation regresses it:
  *
@@ -74,11 +75,13 @@ const config = {
   agent0WebhookSecret: process.env.AGENT0_WEBHOOK_SECRET ?? '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? '',
   // CI context, filled in by GitHub Actions.
-  commitSha: process.env.GITHUB_SHA ?? arg('sha') ?? 'local',
+  /** On PRs GITHUB_SHA is the merge commit; COMMIT_SHA carries the PR head. */
+  commitSha: process.env.COMMIT_SHA || process.env.GITHUB_SHA || arg('sha') || 'local',
   previousSha: process.env.PREVIOUS_SHA ?? '',
   repository: process.env.GITHUB_REPOSITORY ?? '',
   serverUrl: process.env.GITHUB_SERVER_URL ?? 'https://github.com',
   runId: process.env.GITHUB_RUN_ID ?? '',
+  prUrl: process.env.PR_URL ?? '',
   comparisonId: process.env.COMPARISON_ID ?? `local-${Date.now()}`,
   environment: process.env.DEPLOYMENT_ENV ?? 'hackathon',
 };
@@ -247,6 +250,7 @@ async function triggerAgent0(rows: Comparison[]): Promise<boolean> {
     repository: config.repository || 'unknown',
     compareUrl: compareUrl() || 'unavailable',
     ciRunUrl: runUrl() || 'unavailable',
+    prUrl: config.prUrl || 'unavailable',
     baselineEnd: baselineEnd().toISOString(),
     windowStart: config.windowStart.toISOString(),
     bakeMinutes: String(config.bakeMinutes),
@@ -278,6 +282,7 @@ async function notifySlack(rows: Comparison[], agent0Started: boolean): Promise<
   if (!config.slackWebhookUrl) return;
   const sha = config.commitSha.slice(0, 7);
   const links = [
+    config.prUrl && `<${config.prUrl}|PR>`,
     compareUrl() && `<${compareUrl()}|diff>`,
     runUrl() && `<${runUrl()}|CI run>`,
   ]
