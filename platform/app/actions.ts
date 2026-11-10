@@ -5,7 +5,9 @@ import { redirect } from 'next/navigation';
 import { es, INDEX } from '@/lib/es';
 import { clearCurrentUser, getCurrentUser, setCurrentUserId } from '@/lib/session';
 import { enrichProfile, tagTalks, tagsFromKeywords } from '@/lib/ai';
-import { getTalk, listEvents } from '@/lib/search';
+import { getTalk, listEvents, listTalks, savePlanningPreferences } from '@/lib/search';
+import { prepareDayPlan } from '@/lib/day-plan-service';
+import { talkDate } from '@/lib/day-plan';
 import { isInterest } from '@/lib/taxonomy';
 import { getInputMode } from '@/lib/input-mode';
 import { errorAttrs, log } from '@/lib/log';
@@ -75,6 +77,7 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
   const github = String(formData.get('github') ?? '').trim();
   const resumeText = String(formData.get('resumeText') ?? '').trim();
   const eventId = String(formData.get('eventId') ?? '');
+  const planningNotes = String(formData.get('planningNotes') ?? '').trim();
   const inputMode = await getInputMode();
 
   const result = await startSpan(
@@ -109,9 +112,11 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
         );
       }
 
-      if (!(await listEvents()).some((event) => event.id === eventId)) {
+      const selectedEvent = (await listEvents()).find((event) => event.id === eventId);
+      if (!selectedEvent) {
         return rejectOnboarding(span, 'invalid_event', 'Choose an available conference.');
       }
+      if (planningNotes.length > 2000) return rejectOnboarding(span, 'planning_notes_too_long', 'Keep your extra information under 2,000 characters.');
 
       const enriched = await enrichProfile({ name, interests, linkedin, github, resumeText });
       const aiEnriched = enriched.source === 'claude';
@@ -131,6 +136,7 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
       const doc: Omit<User, 'id'> & { semantic?: string } = {
         discoveryOptIn: formData.get('discoveryOptIn') === 'on',
         eventIds: [eventId],
+        planningPreferences: { eventId, date: selectedEvent.startsAt.slice(0, 10), notes: planningNotes },
         name,
         headline: enriched.headline,
         summary: enriched.summary,
@@ -151,6 +157,8 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
 
       await es.index({ index: INDEX.users, id, document: doc, refresh: 'wait_for' });
       await setCurrentUserId(id);
+      try { await prepareDayPlan({ id, ...doc }, selectedEvent, { generate: true }); }
+      catch { log.warn('planning.initial.unavailable', { 'app.feature': 'day-plan' }); }
 
       setSpanAttributes(span, {
         'app.ai.enriched': aiEnriched,
@@ -167,7 +175,27 @@ export async function createProfile(formData: FormData): Promise<OnboardingResul
 
   if (result) return result;
   revalidatePath('/', 'layout');
-  redirect('/agenda');
+  redirect(`/agenda?event=${encodeURIComponent(eventId)}&view=plan`);
+}
+
+export interface PlanningResult { error?: string }
+
+export async function updateDayPlan(formData: FormData): Promise<PlanningResult> {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'Choose a profile before personalising a day plan.' };
+  const eventId = String(formData.get('eventId') ?? '');
+  const date = String(formData.get('date') ?? '');
+  const notes = String(formData.get('planningNotes') ?? '').trim();
+  if (notes.length > 2000) return { error: 'Keep your extra information under 2,000 characters.' };
+  try {
+    const event = (await listEvents()).find((entry) => entry.id === eventId);
+    if (!event || !(await listTalks(eventId)).some((talk) => talkDate(talk) === date)) return { error: 'Choose an available conference day.' };
+    const planningPreferences = { eventId, date, notes };
+    await savePlanningPreferences(user.id, planningPreferences);
+    await prepareDayPlan({ ...user, planningPreferences }, event, { date, generate: true });
+  } catch { return { error: 'Your plan could not be updated. Please try again.' }; }
+  revalidatePath('/agenda');
+  redirect(`/agenda?event=${encodeURIComponent(eventId)}&date=${encodeURIComponent(date)}&view=plan`);
 }
 
 // ---------------------------------------------------------------------------

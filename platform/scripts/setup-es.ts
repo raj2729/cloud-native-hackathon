@@ -92,6 +92,8 @@ const MAPPINGS: Record<string, MappingTypeMapping> = {
       isSeeded: { type: 'boolean' },
       discoveryOptIn: { type: 'boolean' },
       eventIds: { type: 'keyword' },
+      planningPreferences: { type: 'object', enabled: false },
+      dayPlanCache: { type: 'object', enabled: false },
       links: {
         type: 'object',
         properties: {
@@ -193,13 +195,13 @@ async function ensureIndex(name: string, semantic: boolean): Promise<void> {
 
   // Index exists. Adding a new field to an existing mapping is allowed, so this
   // is how a later run upgrades an index once the model finally deploys.
+  await es.indices.putMapping({ index: name, properties: MAPPINGS[name].properties });
   if (!mappings.properties!.semantic) {
     console.log(`✓ index "${name}" exists`);
     return;
   }
 
   const mapping = await es.indices.getMapping({ index: name });
-  await es.indices.putMapping({ index: name, properties: MAPPINGS[name].properties });
   const props = Object.values(mapping)[0]?.mappings?.properties ?? {};
   if ('semantic' in props) {
     console.log(`✓ index "${name}" exists (+semantic)`);

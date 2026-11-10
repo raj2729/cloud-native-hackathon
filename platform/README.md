@@ -353,3 +353,36 @@ of the Dash0 panels. It includes a last-update timestamp and pause/refresh contr
 The MCP investigation card connects to Dash0 and runs a fixed read-only latency
 query; `npm run verify:mcp` verifies available tools. See the observability guide
 for authentication, metric freshness and the limits of this integration.
+
+## Personal day plans
+
+Creating a profile now prepares **My day**, the default `/agenda` view. It selects
+a route without overlapping talks, prioritises saved sessions, explains the day’s
+learning goals, and shows why each talk is relevant. Session cards include room,
+speaker, timing, a learning summary and up to three people with shared professional
+topics. Introductions use only opted-in people in the same conference with saved
+or checked-in attendance records for that exact session. Saved attendance is shown
+as an intention, not a promise that someone will be in the room.
+
+Use **Add extra information** at the top of profile creation or **My day** to add
+project context and goals. **Update my day** saves that private context, reranks
+talks and refreshes the summary and conversation starters. Clear the field to use
+only the profile again. Context does not change the five selected interests or
+public profile. Planning preferences and generated summaries are stored in
+non-indexed `planningPreferences` and `dayPlanCache` fields on the current user.
+Run `npm run es:setup` after updating to add these mappings.
+
+Schedule choices, attendee IDs and times are determined by the app; OpenAI writes
+only validated prose from that evidence. Model generation runs during profile
+creation or an explicit plan update, then caches in Elasticsearch. Ordinary page
+renders use the cache or a grounded profile-based summary. A changed profile,
+context, selected session or attendee evidence invalidates the cached narrative.
+An unavailable model cannot prevent the schedule from rendering.
+
+**Best match** and **By time** remain available alongside **My day**. The day
+selector supports conferences with multiple dates. Session times are explicitly
+shown in UTC. Suggested talks are not automatically saved; use each **Save talk**
+button to choose your own commitments. Conflicting saved talks are listed as
+alternatives rather than silently placed on top of one another.
+
+My day uses compact, keyboard-accessible expandable calendar entries. **Export calendar (.ics)** downloads the selected day’s suggested talks, including UTC times, rooms, learning summaries and people to meet. Export requires the current attendee session and does not save talks or include the extra planning notes.

@@ -28,6 +28,12 @@ export function OnboardingForm({ events }: { events: { id: string; name: string 
 
   return (
     <form action={action} className="mt-8 space-y-8">
+      <details className="card p-4">
+        <summary className="font-medium cursor-pointer">Add extra information for my day (optional)</summary>
+        <label htmlFor="planningNotes" className="block text-sm text-muted mt-4 mb-2">What do you want to learn or work on?</label>
+        <textarea id="planningNotes" name="planningNotes" rows={3} maxLength={2000} className="input" placeholder="I am building an AI agent for customer support. I want practical sessions on tool calling, evaluation and people who have shipped similar systems." />
+        <p className="text-xs text-muted mt-2">Used for your personal plan, separately from your public profile. You can change this at the top of My day.</p>
+      </details>
       <div>
         <label className="label" htmlFor="name">
           Your name
@@ -66,6 +72,7 @@ export function OnboardingForm({ events }: { events: { id: string; name: string 
                       key={interest}
                       type="button"
                       onClick={() => toggle(interest)}
+                      aria-pressed={isOn}
                       disabled={isFull}
                       className={`pill !text-xs !px-2.5 !py-1 transition-colors ${
                         isOn ? 'pill-match' : ''
@@ -148,7 +155,7 @@ export function OnboardingForm({ events }: { events: { id: string; name: string 
           className="btn btn-primary"
           disabled={pending || selected.length !== REQUIRED_INTERESTS}
         >
-          {pending ? 'Building your profile…' : 'Create profile & see my agenda'}
+          {pending ? 'Building your profile and day plan…' : 'Create profile & plan my day'}
         </button>
         {pending && (
           <span className="text-xs text-muted-dim">

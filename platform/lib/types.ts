@@ -72,6 +72,54 @@ export interface User {
   profileText: string;
   semantic?: string;
   createdAt: string;
+  /** Private day-planning preferences; never included in public discovery text. */
+  planningPreferences?: { eventId: string; date: string; notes: string };
+  dayPlanCache?: { fingerprint: string; narrative: DayPlanNarrative; generatedAt: string };
+}
+
+export interface DayPlanPerson {
+  id: string;
+  name: string;
+  headline: string;
+  summary: string;
+  avatarSeed: string;
+  sharedTopics: string[];
+  attendance: AttendanceState;
+  whyMeet: string;
+  conversationStarter: string;
+}
+
+export interface DayPlanSession {
+  talk: Talk;
+  matchedTopics: string[];
+  goalTopics: string[];
+  saved: boolean;
+  whyAttend: string;
+  learningOutcome: string;
+  people: DayPlanPerson[];
+}
+
+export interface DayPlanNarrative {
+  summary: string;
+  learningGoals: string[];
+  sessions: {
+    talkId: string;
+    whyAttend: string;
+    learningOutcome: string;
+    people: { userId: string; whyMeet: string; conversationStarter: string }[];
+  }[];
+  source: 'openai' | 'profile';
+}
+
+export interface PersonalDayPlan {
+  date: string;
+  notes: string;
+  summary: string;
+  learningGoals: string[];
+  sessions: DayPlanSession[];
+  conflictingSaved: Talk[];
+  narrativeSource: DayPlanNarrative['source'];
+  needsRefresh: boolean;
 }
 
 export type AttendanceState = 'saved' | 'checked_in';

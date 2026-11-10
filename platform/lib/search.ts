@@ -188,7 +188,7 @@ export function profileQueryText(user: User): string {
 export async function recommendTalks(
   user: User,
   eventId: string,
-  options: { size?: number } = {},
+  options: { size?: number; context?: string } = {},
 ): Promise<RankedTalk[]> {
   const size = options.size ?? 60;
   const semantic = await semanticReady();
@@ -210,7 +210,7 @@ export async function recommendTalks(
           { terms: { tags: derived, boost: 1.5 } },
           {
             multi_match: {
-              query: [...interests, ...derived].map((i) => i.replace(/-/g, ' ')).join(' '),
+              query: [...interests, ...derived, options.context ?? ''].map((i) => i.replace(/-/g, ' ')).join(' ').slice(0, 3000),
               fields: ['title^3', 'abstract', 'tags^2'],
               boost: 1,
             },
@@ -233,7 +233,7 @@ export async function recommendTalks(
                 {
                   standard: {
                     filter,
-                    query: { semantic: { field: 'semantic', query: profileQueryText(user) } },
+                    query: { semantic: { field: 'semantic', query: [profileQueryText(user), options.context].filter(Boolean).join('. ').slice(0, 3000) } },
                   },
                 },
               ],
@@ -803,4 +803,42 @@ export async function getObservabilitySnapshot(minutes: number, operation: impor
     timeline: agg.timeline.buckets.map((bucket) => ({ at: bucket.key, count: bucket.doc_count, p95: bucket.latency.values['95.0'], errors: bucket.errors.doc_count, fallbacks: bucket.fallbacks.doc_count })),
     incidents: hitsToDocs(agg.incidents.latest.hits.hits), recent: hitsToDocs(response.hits.hits),
   };
+}
+
+/** Only actual opted-in attendees are eligible for a session introduction. */
+export async function getDayPlanPeople(
+  viewer: User, eventId: string, talks: Talk[], goalTopics: string[],
+): Promise<Map<string, import('./types').DayPlanPerson[]>> {
+  const people = new Map<string, import('./types').DayPlanPerson[]>();
+  if (!talks.length) return people;
+  const response = await es.search({
+    index: INDEX.attendance, size: 0,
+    query: { bool: { filter: [{ term: { eventId } }, { terms: { talkId: talks.map((talk) => talk.id) } }, { terms: { state: ['saved', 'checked_in'] } }] } },
+    aggs: { sessions: { terms: { field: 'talkId', size: talks.length }, aggs: {
+      people: { terms: { field: 'userId', size: 500 }, aggs: { checkedIn: { filter: { term: { state: 'checked_in' } } } } },
+    } } },
+  });
+  const sessions = (response.aggregations as unknown as { sessions: { buckets: { key: string; people: { buckets: { key: string; checkedIn: { doc_count: number } }[] } }[] } }).sessions.buckets;
+  const ids = [...new Set(sessions.flatMap((session) => session.people.buckets.map((person) => person.key)))].filter((id) => id !== viewer.id);
+  if (!ids.length) return people;
+  const profiles = await es.search<Omit<User, 'id'>>({
+    index: INDEX.users, size: ids.length,
+    _source: ['name', 'headline', 'summary', 'interests', 'derivedTags', 'avatarSeed', 'discoveryOptIn', 'eventIds'],
+    query: { bool: { filter: [{ ids: { values: ids } }, { term: { discoveryOptIn: true } }, { term: { eventIds: eventId } }], must_not: [{ ids: { values: [viewer.id] } }] } },
+  });
+  const { matchSessionPeople } = await import('./day-plan');
+  const candidates = hitsToDocs(profiles.hits.hits);
+  for (const session of sessions) {
+    const attendance = new Map(session.people.buckets.map((person) => [person.key, person.checkedIn.doc_count ? 'checked_in' as const : 'saved' as const]));
+    people.set(session.key, matchSessionPeople(viewer, candidates, attendance, eventId, goalTopics));
+  }
+  return people;
+}
+
+export async function savePlanningPreferences(userId: string, preferences: NonNullable<User['planningPreferences']>): Promise<void> {
+  await es.update({ index: INDEX.users, id: userId, doc: { planningPreferences: preferences }, refresh: 'wait_for' });
+}
+
+export async function cacheDayPlan(userId: string, cache: NonNullable<User['dayPlanCache']>): Promise<void> {
+  await es.update({ index: INDEX.users, id: userId, doc: { dayPlanCache: cache }, refresh: 'wait_for' });
 }

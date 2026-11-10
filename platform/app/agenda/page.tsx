@@ -12,11 +12,14 @@ import { SimilarAttendanceStrip } from '@/components/similar-attendance-strip';
 import { ChooseProfileNotice } from '@/components/choose-profile-notice';
 import { SetupNotice } from '@/components/setup-notice';
 import { label } from '@/lib/taxonomy';
+import { PersonalDayPlanView } from '@/components/personal-day-plan';
+import { prepareDayPlan } from '@/lib/day-plan-service';
+import { requestNow } from '@/lib/now';
 import type { RankedTalk } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-type View = 'match' | 'time';
+type View = 'plan' | 'match' | 'time';
 
 function groupBySlot(talks: RankedTalk[]): { time: string; talks: RankedTalk[] }[] {
   const groups = new Map<string, RankedTalk[]>();
@@ -37,10 +40,10 @@ function groupBySlot(talks: RankedTalk[]): { time: string; talks: RankedTalk[] }
 export default async function AgendaPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; event?: string }>;
+  searchParams: Promise<{ view?: string; event?: string; date?: string }>;
 }) {
   const params = await searchParams;
-  const view: View = params.view === 'time' ? 'time' : 'match';
+  const view: View = params.view === 'time' ? 'time' : params.view === 'match' ? 'match' : 'plan';
 
   const user = await getCurrentUser();
   if (!user) return <ChooseProfileNotice />;
@@ -53,12 +56,13 @@ export default async function AgendaPage({
   }
   if (events.length === 0) return <SetupNotice message="No conferences published yet." seedHint />;
 
-  const event = events.find((e) => e.id === params.event) ?? events[0];
+  const event = events.find((e) => e.id === (params.event ?? user.eventIds?.[0])) ?? events[0];
+  const notes = user.planningPreferences?.eventId === event.id ? user.planningPreferences.notes : '';
 
   const [ranked, savedIds, similar] = await Promise.all([
-    recommendTalks(user, event.id),
+    recommendTalks(user, event.id, { size: 200, context: view === 'plan' ? notes : undefined }),
     getMyTalkIds(user.id),
-    similarPeopleAttending(user, event.id),
+    view === 'plan' ? Promise.resolve([]) : similarPeopleAttending(user, event.id),
   ]);
 
   const counts = await getTalkAttendeeCounts(ranked.map((r) => r.talk.id));
@@ -66,40 +70,44 @@ export default async function AgendaPage({
 
   const slots = groupBySlot(withCounts);
   const topMatch = withCounts[0];
+  const day = view === 'plan' ? await prepareDayPlan(user, event, { date: params.date, ranked, savedIds }) : null;
+  const now = await requestNow();
 
   return (
     <div className="pt-10">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-wider text-muted-dim">{event.venue}</p>
-          <h1 className="text-2xl font-semibold tracking-tight mt-1">{event.name}</h1>
+          <p className="text-xs uppercase tracking-wider text-muted">{event.venue}</p>
+          <h1 className="text-2xl font-semibold tracking-tight mt-1">{view === 'plan' ? `My day at ${event.name}` : event.name}</h1>
           <p className="text-sm text-muted mt-1.5">
             Ranked for <span className="text-foreground">{user.name}</span> ·{' '}
             {user.interests.map(label).join(', ')}
           </p>
-          <p className="text-xs text-muted-dim mt-1">
-            You are not searching this agenda — it reordered itself around you.
+          <p className="text-xs text-muted mt-1">
+            Your profile shapes the sessions, learning goals and people in your plan.
           </p>
         </div>
 
         <div className="flex gap-1 p-1 card">
-          {(['match', 'time'] as View[]).map((option) => (
+          {(['plan', 'match', 'time'] as View[]).map((option) => (
             <Link
               key={option}
-              href={`/agenda?view=${option}&event=${event.id}`}
+              href={`/agenda?view=${option}&event=${event.id}${params.date ? `&date=${encodeURIComponent(params.date)}` : ''}`}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 view === option
                   ? 'bg-surface-2 text-foreground'
                   : 'text-muted hover:text-foreground'
               }`}
             >
-              {option === 'match' ? 'Best match' : 'By time'}
+              {option === 'plan' ? 'My day' : option === 'match' ? 'Best match' : 'By time'}
             </Link>
           ))}
         </div>
       </header>
 
-      {topMatch && (
+      {day && <PersonalDayPlanView plan={day.plan} event={event} dates={day.dates} now={now} />}
+
+      {view !== 'plan' && topMatch && (
         <div className="card mt-6 p-4 flex items-center gap-4 border-accent-dim/50 bg-accent/5">
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-wider text-accent">Your strongest match</p>
@@ -120,7 +128,7 @@ export default async function AgendaPage({
 
       {similar.length > 0 && <SimilarAttendanceStrip rows={similar} />}
 
-      <section className="mt-10">
+      {view !== 'plan' && <section className="mt-10">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-dim mb-4">
           {view === 'match' ? `All ${withCounts.length} talks, best match first` : 'Full schedule'}
         </h2>
@@ -150,7 +158,7 @@ export default async function AgendaPage({
             ))}
           </div>
         )}
-      </section>
+      </section>}
     </div>
   );
 }
